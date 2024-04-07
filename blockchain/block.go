@@ -19,6 +19,9 @@ type Block struct {
 	Sig       crypto.Signature
 	ID        crypto.Identifier
 	Ts        time.Duration
+	Mali      bool
+	forkNum   int
+	height    int
 }
 
 type rawBlock struct {
@@ -32,13 +35,16 @@ type rawBlock struct {
 }
 
 // MakeBlock creates an unsigned block
-func MakeBlock(view types.View, qc *QC, prevID crypto.Identifier, payload []*message.Transaction, proposer identity.NodeID) *Block {
+func MakeBlock(view types.View, qc *QC, prevID crypto.Identifier, payload []*message.Transaction, proposer identity.NodeID, mali bool, forkNum int, height int) *Block {
 	b := new(Block)
 	b.View = view
 	b.Proposer = proposer
 	b.QC = qc
 	b.Payload = payload
 	b.PrevID = prevID
+	b.Mali = mali
+	b.forkNum = forkNum
+	b.height = height
 	b.makeID(proposer)
 	return b
 }
@@ -58,4 +64,28 @@ func (b *Block) makeID(nodeID identity.NodeID) {
 	b.ID = crypto.MakeID(raw)
 	// TODO: uncomment the following
 	b.Sig, _ = crypto.PrivSign(crypto.IDToByte(b.ID), nodeID, nil)
+}
+
+func (b *Block) SetMali(mali bool) {
+	b.Mali = mali
+}
+
+func (b *Block) GetMali() bool {
+	return b.Mali
+}
+
+func (b *Block) SetForkNum(forkNum int) {
+	b.forkNum = forkNum
+}
+
+func (b *Block) GetForkNum() int {
+	return b.forkNum
+}
+
+func (b *Block) SetHeight(height int) {
+	b.height = height
+}
+
+func (b *Block) GetHeight() int {
+	return b.height
 }

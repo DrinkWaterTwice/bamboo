@@ -3,9 +3,10 @@ package replica
 import (
 	"encoding/gob"
 	"fmt"
+	"time"
+
 	fhs "github.com/gitferry/bamboo/fasthostuff"
 	"github.com/gitferry/bamboo/lbft"
-	"time"
 
 	"go.uber.org/atomic"
 
@@ -59,6 +60,9 @@ type Replica struct {
 	proposedNo           int
 	processedNo          int
 	committedNo          int
+	forkedNo             int
+	maliNo               int
+	kindNo               int
 }
 
 // NewReplica creates a new replica instance
@@ -145,9 +149,15 @@ func (r *Replica) handleQuery(m message.Query) {
 	//aveRoundTime := float64(r.totalRoundTime.Milliseconds()) / float64(r.roundNo)
 	//aveProposeTime := aveRoundTime - aveProcessTime - aveVoteProcessTime
 	latency := float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo)
-	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s\n", time.Now().Sub(r.startTime).Seconds(), float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds())
+	bsize := config.GetConfig().BSize
+	// r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s.\n", time.Now().Sub(r.startTime).Seconds(), float64(r.totalCommittedTx-r.maliNo)/time.Now().Sub(r.tmpTime).Seconds())
+	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s.\n", time.Now().Sub(r.startTime).Seconds(), float64(bsize*(r.kindNo-r.forkedNo*config.GetConfig().ByzNo))/time.Now().Sub(r.startTime).Seconds())
+	r.thrus += fmt.Sprintf("maliBlock: %v. forkedBlock: %v. totalNo: %v. kindNo: %v.\n", r.maliNo, r.forkedNo*config.GetConfig().ByzNo, r.committedNo, r.kindNo)
+	r.thrus += fmt.Sprintf("chainQuality: %v.\n", float64(r.kindNo-r.forkedNo*config.GetConfig().ByzNo)/float64(r.committedNo-r.forkedNo*config.GetConfig().ByzNo))
+	r.thrus += fmt.Sprintf("chainGrowth: %v per second\n", float64(r.kindNo-r.forkedNo*config.GetConfig().ByzNo)/time.Now().Sub(r.startTime).Seconds())
+	r.thrus += fmt.Sprintf("\n")
 	r.totalCommittedTx = 0
-	r.tmpTime = time.Now()
+	// r.tmpTime = time.Now()
 	status := fmt.Sprintf("Latency: %v\n%s", latency, r.thrus)
 	//status := fmt.Sprintf("chain status is: %s\nCommitted rate is %v.\nAve. block size is %v.\nAve. trans. delay is %v ms.\nAve. creation time is %f ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nRequest rate is %f txs/s.\nAve. round time is %f ms.\nLatency is %f ms.\nThroughput is %f txs/s.\n", r.Safety.GetChainStatus(), committedRate, aveBlockSize, aveTransDelay, aveCreateDuration, aveProcessTime, aveVoteProcessTime, requestRate, aveRoundTime, latency, throughput)
 	//status := fmt.Sprintf("Ave. actual proposing time is %v ms.\nAve. proposing time is %v ms.\nAve. processing time is %v ms.\nAve. vote time is %v ms.\nAve. block size is %v.\nAve. round time is %v ms.\nLatency is %v ms.\n", realAveProposeTime, aveProposeTime, aveProcessTime, aveVoteProcessTime, aveBlockSize, aveRoundTime, latency)
@@ -177,6 +187,13 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	}
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
+	// count the number of malicious blocks and the number of forked blocks
+	if block.GetMali() {
+		r.maliNo++
+		r.forkedNo += block.GetForkNum()
+	} else {
+		r.kindNo++
+	}
 	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 

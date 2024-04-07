@@ -180,15 +180,18 @@ func (hs *HotStuff) forkChoice() *blockchain.QC {
 		return hs.GetHighQC()
 	}
 	//	create a fork by returning highQC's parent's QC
+	//
 	parBlockID := hs.GetHighQC().BlockID
 	parBlock, err := hs.bc.GetBlockByID(parBlockID)
 	if err != nil {
-		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+		log.Warningf("cannot get parent block of block id: %x: %v", parBlockID, err)
 	}
 	if parBlock.QC.View < hs.preferredView {
 		choice = hs.GetHighQC()
+
 	} else {
 		choice = parBlock.QC
+
 	}
 	// to simulate TC's view
 	choice.View = hs.pm.GetCurView() - 1

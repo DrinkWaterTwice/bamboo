@@ -5,7 +5,7 @@ s = []
 durations = []
 totalThroughput = 0.0
 totalLatency = 0.0
-f = open("server.30314.log")
+f = open("bin/server.19346.log")
 counter = 0
 for line in iter(f):
     if "millisecond" in line:
