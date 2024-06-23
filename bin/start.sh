@@ -5,9 +5,12 @@ SERVER_PID_FILE=server.pid
 SERVER_PID=$(cat "${SERVER_PID_FILE}");
 
 if [ -z "${SERVER_PID}" ]; then
+    go build ../server/
+    rm -rf log
+    mkdir log
     for id in $(seq 1 4); do
         echo "Process id for server ${id} is written to location: ${SERVER_PID_FILE}"
-        ./server -id ${id} -log_dir=. -log_level=debug -algorithm=hotstuff &
+        ./server -id ${id} -log_dir=./log -log_level=debug -algorithm=hotstuff &
         echo $! >> ${SERVER_PID_FILE}
     done
 else

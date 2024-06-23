@@ -45,6 +45,12 @@ type Config struct {
 	MemSize        int             `json:"memsize"`
 	Slow           int             `json:"slow"`
 	Crash          int             `json:"crash"`
+	BroadcastQC    bool            `json:"broadcastQC"`
+	Longest        bool            `json:"longest"`
+	ForkATK        bool            `json:"forkATK"`
+	DelayATK       bool            `json:"delayATK"`
+	Algorithm      string          `json:"algo"`
+	OutputLog			 bool						`json:"outputLog"`
 
 	hasher string
 	signer string

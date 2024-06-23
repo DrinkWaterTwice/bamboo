@@ -3,6 +3,7 @@ package blockchain
 import (
 	"fmt"
 
+	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
@@ -55,6 +56,7 @@ func NewQuorum(total int) *Quorum {
 // Add adds id to quorum ack records
 func (q *Quorum) Add(vote *Vote) (bool, *QC) {
 	if q.superMajority(vote.BlockID) {
+		log.Debugf("Luo already have a super majority for block id: %x", vote.BlockID)
 		return false, nil
 	}
 	_, exist := q.votes[vote.BlockID]
@@ -81,7 +83,10 @@ func (q *Quorum) Add(vote *Vote) (bool, *QC) {
 
 // Super majority quorum satisfied
 func (q *Quorum) superMajority(blockID crypto.Identifier) bool {
-	return q.size(blockID) > q.total*2/3
+	// log.Debugf("quorum size: %d, total: %d", q.size(blockID), q.total)
+	// return q.size(blockID) > q.total*2/3
+	return q.size(blockID) >= config.GetConfig().ByzNo*2+1
+
 }
 
 // Size returns ack size for the block

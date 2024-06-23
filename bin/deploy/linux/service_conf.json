@@ -1,6 +1,6 @@
 {
   "auth": {
-    "user": "gpt"
+    "user": "root"
   },
   "server": {
     "dir": "bamboo",

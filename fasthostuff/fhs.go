@@ -66,6 +66,19 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 		log.Debugf("[%v] the block is buffered, view: %v, current view is: %v, id: %x", f.ID(), block.View, curView, block.ID)
 		return nil
 	}
+	f.bc.AddBlock(block)
+
+	log.Debugf("[%v] voting is processed, view: %v, id: %x", f.ID(), block.View, block.ID)
+	shouldVote, err := f.votingRule(block)
+	if err != nil {
+		log.Errorf("cannot decide whether to vote the block, %w", err)
+		return err
+	}
+	if !shouldVote {
+		log.Debugf("[%v] is not going to vote for block, id: %x", f.ID(), block.ID)
+		return nil
+	}
+
 	if block.QC != nil {
 		f.updateHighQC(block.QC)
 	} else {
@@ -82,25 +95,28 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 	if !f.Election.IsLeader(block.Proposer, block.View) {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
-	f.bc.AddBlock(block)
+	log.Debugf("[%v] is adding block to the blockchain, view: %v, id: %x", f.ID(), block.View, block.ID)
 
 	// check commit rule
 	qc := block.QC
 	if qc.View >= 2 && qc.View+1 == block.View {
+
 		ok, b, _ := f.commitRule(block)
 		if !ok {
-			return nil
+			// return nil
+		} else {
+			committedBlocks, forkedBlocks, err := f.bc.CommitBlock(b.ID, f.pm.GetCurView())
+			if err != nil {
+				return fmt.Errorf("[%v] cannot commit blocks", f.ID())
+			}
+			for _, cBlock := range committedBlocks {
+				f.committedBlocks <- cBlock
+			}
+			for _, fBlock := range forkedBlocks {
+				f.forkedBlocks <- fBlock
+			}
 		}
-		committedBlocks, forkedBlocks, err := f.bc.CommitBlock(b.ID, f.pm.GetCurView())
-		if err != nil {
-			return fmt.Errorf("[%v] cannot commit blocks", f.ID())
-		}
-		for _, cBlock := range committedBlocks {
-			f.committedBlocks <- cBlock
-		}
-		for _, fBlock := range forkedBlocks {
-			f.forkedBlocks <- fBlock
-		}
+
 	}
 
 	// process buffered QC
@@ -110,15 +126,6 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 		delete(f.bufferedQCs, block.ID)
 	}
 
-	shouldVote, err := f.votingRule(block)
-	if err != nil {
-		log.Errorf("cannot decide whether to vote the block, %w", err)
-		return err
-	}
-	if !shouldVote {
-		log.Debugf("[%v] is not going to vote for block, id: %x", f.ID(), block.ID)
-		return nil
-	}
 	vote := blockchain.MakeVote(block.View, f.ID(), block.ID)
 	// vote to the next leader
 	voteAggregator := f.FindLeaderFor(block.View + 1)
@@ -139,7 +146,7 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
-	log.Debugf("[%v] is processing the vote from %v, block id: %x", f.ID(), vote.Voter, vote.BlockID)
+	log.Debugf("[%v] is processing the vote from %v, block id: %x, view %v", f.ID(), vote.Voter, vote.BlockID, vote.View)
 	if f.ID() != vote.Voter {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
 		if err != nil {
@@ -151,6 +158,8 @@ func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
 			return
 		}
 	}
+	block, _ := f.bc.GetBlockByID(vote.BlockID)
+
 	isBuilt, qc := f.bc.AddVote(vote)
 	if !isBuilt {
 		log.Debugf("[%v] not sufficient votes to build a QC, block id: %x", f.ID(), vote.BlockID)
@@ -162,6 +171,15 @@ func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
 		f.bufferedQCs[qc.BlockID] = qc
 		return
 	}
+
+	if f.IsByz() && config.GetConfig().ForkATK && !block.Mali {
+		// if vote.View <= f.pm.GetCurView() {
+		// 	return
+		// }
+		f.pm.AdvanceView(qc.View)
+		return
+	}
+
 	f.processCertificate(qc)
 }
 
@@ -192,16 +210,27 @@ func (f *Fhs) ProcessLocalTmo(view types.View) {
 }
 
 func (f *Fhs) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
-	qc := f.forkChoice()
-	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, f.ID())
+	qc, forkNum := f.forkChoice()
+	log.Debugf("[%v] is making a proposal for view %v, forkNum: %v, qc's view %v", f.ID(), view, forkNum, qc.View)
+	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, f.ID(), f.IsByz(), forkNum, 0)
 	return block
 }
 
-func (f *Fhs) forkChoice() *blockchain.QC {
+func (f *Fhs) forkChoice() (*blockchain.QC, int) {
 	choice := f.GetHighQC()
+	forkNum := 0
+	if f.IsByz() {
+		choice.View = f.pm.GetCurView() - 1
+		if f.FindLeaderFor(f.pm.GetCurView()+1).Node() > config.GetConfig().ByzNo {
+			forkNum = 1
+		}
+
+		return choice, forkNum
+	} else {
+		// choice.View = f.pm.GetCurView() - 1
+		return choice, forkNum
+	}
 	// to simulate TC under forking attack
-	choice.View = f.pm.GetCurView() - 1
-	return choice
 }
 
 func (f *Fhs) processTC(tc *pacemaker.TC) {
@@ -234,6 +263,7 @@ func (f *Fhs) updateHighQC(qc *blockchain.QC) {
 func (f *Fhs) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a QC, block id: %x", f.ID(), qc.BlockID)
 	if qc.View < f.pm.GetCurView() {
+		log.Debugf("[%v] received a stale qc, view: %v, current view: %v", f.ID(), qc.View, f.pm.GetCurView())
 		return
 	}
 	if qc.Leader != f.ID() {
@@ -243,10 +273,7 @@ func (f *Fhs) processCertificate(qc *blockchain.QC) {
 			return
 		}
 	}
-	if f.IsByz() && config.GetConfig().Strategy == FORK && f.IsLeader(f.ID(), qc.View+1) {
-		f.pm.AdvanceView(qc.View)
-		return
-	}
+
 	err := f.updatePreferredView(qc)
 	if err != nil {
 		f.bufferedQCs[qc.BlockID] = qc
@@ -263,7 +290,8 @@ func (f *Fhs) votingRule(block *blockchain.Block) (bool, error) {
 	}
 	parentBlock, err := f.bc.GetParentBlock(block.ID)
 	if err != nil {
-		return false, fmt.Errorf("cannot vote for block: %w", err)
+		log.Debugf("[%v] cannot vote for block: %w, %v, %v", f.ID(), err, block.QC.View, block.QC.Leader)
+		return false, fmt.Errorf("cannot vote for block: %w, %v, %v", err, block.QC.View, block.QC.Leader)
 	}
 	if (block.View <= f.lastVotedView) || (parentBlock.View < f.preferredView) {
 		if parentBlock.View < f.preferredView {

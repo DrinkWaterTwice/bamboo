@@ -2,6 +2,7 @@ package lbft
 
 import (
 	"fmt"
+
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/crypto"
@@ -173,7 +174,7 @@ func (lb *Lbft) MakeProposal(view types.View, payload []*message.Transaction) *b
 		BlockID:   prevID,
 		AggSig:    nil,
 		Signature: nil,
-	}, prevID, payload, lb.ID())
+	}, prevID, payload, lb.ID(), false, 0, 0)
 	return block
 }
 

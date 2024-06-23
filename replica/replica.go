@@ -3,6 +3,7 @@ package replica
 import (
 	"encoding/gob"
 	"fmt"
+	"os"
 	"time"
 
 	fhs "github.com/gitferry/bamboo/fasthostuff"
@@ -63,6 +64,8 @@ type Replica struct {
 	forkedNo             int
 	maliNo               int
 	kindNo               int
+	totolCommitTimes     int
+	lastComittedView     types.View
 }
 
 // NewReplica creates a new replica instance
@@ -95,7 +98,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TMO{})
 
 	// Is there a better way to reduce the number of parameters?
-	switch alg {
+	switch config.GetConfig().Algorithm {
 	case "hotstuff":
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	case "tchs":
@@ -117,14 +120,16 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 func (r *Replica) HandleBlock(block blockchain.Block) {
 	r.receivedNo++
 	r.startSignal()
-	log.Debugf("[%v] received a block from %v, view is %v, id: %x, prevID: %x", r.ID(), block.Proposer, block.View, block.ID, block.PrevID)
 	r.eventChan <- block
 }
 
 func (r *Replica) HandleVote(vote blockchain.Vote) {
-	if vote.View < r.pm.GetCurView() {
-		return
+	if config.GetConfig().Algorithm != "streamlet" {
+		if vote.View < r.pm.GetCurView() {
+			return
+		}
 	}
+
 	r.startSignal()
 	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
 	r.eventChan <- vote
@@ -153,8 +158,11 @@ func (r *Replica) handleQuery(m message.Query) {
 	// r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s.\n", time.Now().Sub(r.startTime).Seconds(), float64(r.totalCommittedTx-r.maliNo)/time.Now().Sub(r.tmpTime).Seconds())
 	r.thrus += fmt.Sprintf("Time: %v s. Throughput: %v txs/s.\n", time.Now().Sub(r.startTime).Seconds(), float64(bsize*(r.kindNo-r.forkedNo*config.GetConfig().ByzNo))/time.Now().Sub(r.startTime).Seconds())
 	r.thrus += fmt.Sprintf("maliBlock: %v. forkedBlock: %v. totalNo: %v. kindNo: %v.\n", r.maliNo, r.forkedNo*config.GetConfig().ByzNo, r.committedNo, r.kindNo)
-	r.thrus += fmt.Sprintf("chainQuality: %v.\n", float64(r.kindNo-r.forkedNo*config.GetConfig().ByzNo)/float64(r.committedNo-r.forkedNo*config.GetConfig().ByzNo))
-	r.thrus += fmt.Sprintf("chainGrowth: %v per second\n", float64(r.kindNo-r.forkedNo*config.GetConfig().ByzNo)/time.Now().Sub(r.startTime).Seconds())
+	r.thrus += fmt.Sprintf("chainQuality: %v.\n", float64(r.kindNo)/float64(r.committedNo))
+	r.thrus += fmt.Sprintf("censorship: %v.\n", float64(r.kindNo)/float64(r.kindNo+r.forkedNo*config.GetConfig().ByzNo))
+	r.thrus += fmt.Sprintf("view/commit: %v.\n", float64(r.pm.GetCurView())/float64(r.totolCommitTimes))
+	r.thrus += fmt.Sprintf("commitTimes: %v .\n", r.totolCommitTimes)
+	r.thrus += fmt.Sprintf("view: %v .\n", r.pm.GetCurView())
 	r.thrus += fmt.Sprintf("\n")
 	r.totalCommittedTx = 0
 	// r.tmpTime = time.Now()
@@ -177,6 +185,10 @@ func (r *Replica) handleTxn(m message.Transaction) {
 /* Processors */
 
 func (r *Replica) processCommittedBlock(block *blockchain.Block) {
+	if block.CommitFromThis {
+		r.totolCommitTimes++
+	}
+
 	if block.Proposer == r.ID() {
 		for _, txn := range block.Payload {
 			// only record the delay of transactions from the local memory pool
@@ -187,6 +199,39 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	}
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
+
+	if r.committedNo%1000 == 0 && r.ID().Node() == 1 && true {
+		// 打开文件，如果文件不存在则创建
+		indexFile, err := os.OpenFile(config.Configuration.Algorithm+"_index.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			log.Errorf("open file error: %v", err)
+		}
+
+		chainQualityFile, _ := os.OpenFile(config.Configuration.Algorithm+"_chainQuality.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		censorship, _ := os.OpenFile(config.Configuration.Algorithm+"_censorship.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		maliBlock, _ := os.OpenFile(config.Configuration.Algorithm+"_maliBlock.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		forkedBlock, _ := os.OpenFile(config.Configuration.Algorithm+"_forkedBlock.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		totalBlock, _ := os.OpenFile(config.Configuration.Algorithm+"_totalBlock.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		kindBlock, _ := os.OpenFile(config.Configuration.Algorithm+"_kindBlock.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		// defer语句会在函数执行到最后执行，而不是在调用defer语句的时候执行
+
+		defer chainQualityFile.Close()
+		defer indexFile.Close()
+		defer censorship.Close()
+		defer maliBlock.Close()
+		defer forkedBlock.Close()
+		defer totalBlock.Close()
+		defer kindBlock.Close()
+		// 写入内容
+		indexFile.WriteString(fmt.Sprintf("%d,", r.committedNo))
+		chainQualityFile.WriteString(fmt.Sprintf("%f,", float64(r.kindNo)/float64(r.committedNo)))
+		censorship.WriteString(fmt.Sprintf("%f,", float64(r.kindNo)/float64(r.kindNo+r.forkedNo*config.GetConfig().ByzNo)))
+		maliBlock.WriteString(fmt.Sprintf("%d,", r.maliNo))
+		forkedBlock.WriteString(fmt.Sprintf("%d,", r.forkedNo*config.GetConfig().ByzNo))
+		totalBlock.WriteString(fmt.Sprintf("%d,", r.committedNo))
+		kindBlock.WriteString(fmt.Sprintf("%d,", r.kindNo))
+	}
+
 	// count the number of malicious blocks and the number of forked blocks
 	if block.GetMali() {
 		r.maliNo++
@@ -194,7 +239,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	} else {
 		r.kindNo++
 	}
-	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
+	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x, forkNum: %v, Byz: %v, commitFromThis %v", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID, block.GetForkNum(), block.GetMali(), block.CommitFromThis)
 }
 
 func (r *Replica) processForkedBlock(block *blockchain.Block) {
@@ -224,7 +269,10 @@ func (r *Replica) proposeBlock(view types.View) {
 	createDuration := createEnd.Sub(createStart)
 	block.Timestamp = time.Now()
 	r.totalCreateDuration += createDuration
-	r.Broadcast(block)
+	// if the Algorithm is streamlet, the leader will broadcast the block
+	if config.GetConfig().Algorithm != "streamlet" {
+		r.Broadcast(block)
+	}
 	_ = r.Safety.ProcessBlock(block)
 	r.voteStart = time.Now()
 }

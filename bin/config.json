@@ -4,24 +4,28 @@
     "2": "tcp://127.0.0.1:3736",
     "3": "tcp://127.0.0.1:3737",
     "4": "tcp://127.0.0.1:3738"
-
   },
   "http_address": {
     "1": "http://127.0.0.1:8070",
     "2": "http://127.0.0.1:8071",
     "3": "http://127.0.0.1:8072",
     "4": "http://127.0.0.1:8073"
-    
   },
   "policy": "majority",
   "threshold": 3,
+  "algo": "tchs",
   "byzNo": 1,
-  "strategy": "fork",
+  "outputLog": false,
+  "broadcastQC": false,
+  "longest": false,
+  "strategy": "",
+  "forkATK": true,
+  "delayATK": false,
   "thrifty": false,
   "chan_buffer_size": 10240,
   "buffer_size": 10240,
   "multiversion": false,
-  "timeout": 350,
+  "timeout": 70,
   "bsize": 100,
   "memsize": 50,
   "fixed": false,

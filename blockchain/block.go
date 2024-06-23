@@ -11,17 +11,18 @@ import (
 
 type Block struct {
 	types.View
-	QC        *QC
-	Proposer  identity.NodeID
-	Timestamp time.Time
-	Payload   []*message.Transaction
-	PrevID    crypto.Identifier
-	Sig       crypto.Signature
-	ID        crypto.Identifier
-	Ts        time.Duration
-	Mali      bool
-	forkNum   int
-	height    int
+	QC             *QC
+	Proposer       identity.NodeID
+	Timestamp      time.Time
+	Payload        []*message.Transaction
+	PrevID         crypto.Identifier
+	Sig            crypto.Signature
+	ID             crypto.Identifier
+	Ts             time.Duration
+	Mali           bool
+	forkNum        int
+	height         int
+	CommitFromThis bool
 }
 
 type rawBlock struct {
@@ -46,6 +47,7 @@ func MakeBlock(view types.View, qc *QC, prevID crypto.Identifier, payload []*mes
 	b.forkNum = forkNum
 	b.height = height
 	b.makeID(proposer)
+	b.CommitFromThis = false
 	return b
 }
 

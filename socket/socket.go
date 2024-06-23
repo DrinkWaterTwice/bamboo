@@ -130,7 +130,7 @@ func (s *socket) Send(to identity.NodeID, m interface{}) {
 	}
 
 	t.Send(m)
-	//log.Debugf("[%v] message %v is sent to %v", s.id, m, to)
+	// log.Debugf("[%v] message %v is sent to %v", s.id, m, to)
 }
 
 func (s *socket) Recv() interface{} {
@@ -140,6 +140,7 @@ func (s *socket) Recv() interface{} {
 	for {
 		m := t.Recv()
 		if !s.crash {
+			// log.Debugf("node %s received message %+v", s.id, m)
 			return m
 		}
 	}
@@ -167,7 +168,7 @@ func (s *socket) Broadcast(m interface{}) {
 		}
 		s.Send(id, m)
 	}
-	//log.Debugf("node %s done  broadcasting message %+v", s.id, m)
+	// log.Debugf("node %s done  broadcasting message %+v", s.id, m)
 }
 
 func (s *socket) Close() {

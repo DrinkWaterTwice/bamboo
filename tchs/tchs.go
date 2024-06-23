@@ -89,18 +89,20 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 	if qc.View >= 2 && qc.View+1 == block.View {
 		ok, b, _ := th.commitRule(block)
 		if !ok {
-			return nil
+			// return nil
+		} else {
+			committedBlocks, forkedBlocks, err := th.bc.CommitBlock(b.ID, th.pm.GetCurView())
+			if err != nil {
+				return fmt.Errorf("[%v] cannot commit blocks", th.ID())
+			}
+			for _, cBlock := range committedBlocks {
+				th.committedBlocks <- cBlock
+			}
+			for _, fBlock := range forkedBlocks {
+				th.forkedBlocks <- fBlock
+			}
 		}
-		committedBlocks, forkedBlocks, err := th.bc.CommitBlock(b.ID, th.pm.GetCurView())
-		if err != nil {
-			return fmt.Errorf("[%v] cannot commit blocks", th.ID())
-		}
-		for _, cBlock := range committedBlocks {
-			th.committedBlocks <- cBlock
-		}
-		for _, fBlock := range forkedBlocks {
-			th.forkedBlocks <- fBlock
-		}
+
 	}
 
 	// process buffered QC
@@ -139,6 +141,7 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (th *Tchs) ProcessVote(vote *blockchain.Vote) {
+
 	log.Debugf("[%v] is processing the vote from %v, block id: %x", th.ID(), vote.Voter, vote.BlockID)
 	if th.ID() != vote.Voter {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -167,6 +170,7 @@ func (th *Tchs) ProcessVote(vote *blockchain.Vote) {
 
 func (th *Tchs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 	log.Debugf("[%v] is processing tmo from %v", th.ID(), tmo.NodeID)
+	log.Debugf("current view is %v, tmo is %v", th.pm.GetCurView(), tmo.View)
 	if tmo.View < th.pm.GetCurView() {
 		return
 	}
@@ -192,16 +196,44 @@ func (th *Tchs) ProcessLocalTmo(view types.View) {
 }
 
 func (th *Tchs) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
-	qc := th.forkChoice()
-	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, th.ID())
+	qc, flag, _ := th.forkChoice()
+	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, th.ID(), th.IsByz(), flag, 0)
 	return block
 }
 
-func (th *Tchs) forkChoice() *blockchain.QC {
-	choice := th.GetHighQC()
+func (th *Tchs) forkChoice() (*blockchain.QC, int, int) {
+	if th.IsByz() && config.Configuration.ForkATK {
+		return th.forkRule()
+	}
 	// to simulate TC under forking attack
-	choice.View = th.pm.GetCurView() - 1
-	return choice
+
+	return th.GetHighQC(), 0, 0
+}
+
+func (hs *Tchs) forkRule() (*blockchain.QC, int, int) {
+	var flag int = 0
+	var height int = 0
+	var choice *blockchain.QC
+	//罗要fork的block的parent block
+	parBlockID := hs.GetHighQC().BlockID
+	parBlock, err := hs.bc.GetBlockByID(parBlockID)
+	if err != nil {
+		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+	}
+	if parBlock.View < hs.preferredView || parBlock.GetMali() {
+		flag = 0
+		choice = hs.GetHighQC()
+		height = 0
+		return choice, flag, height
+	} else {
+		flag = 1
+		choice = parBlock.QC
+		height = parBlock.GetHeight()
+	}
+
+	// to simulate Tc's view
+	choice.View = hs.pm.GetCurView() - 1
+	return choice, flag, height
 }
 
 func (th *Tchs) processTC(tc *pacemaker.TC) {
@@ -243,10 +275,10 @@ func (th *Tchs) processCertificate(qc *blockchain.QC) {
 			return
 		}
 	}
-	if th.IsByz() && config.GetConfig().Strategy == FORK && th.IsLeader(th.ID(), qc.View+1) {
-		th.pm.AdvanceView(qc.View)
-		return
-	}
+	// if th.IsByz() && config.GetConfig().ForkATK && th.IsLeader(th.ID(), qc.View+1) {
+	// 	th.pm.AdvanceView(qc.View)
+	// 	return
+	// }
 	err := th.updatePreferredView(qc)
 	if err != nil {
 		th.bufferedQCs[qc.BlockID] = qc
@@ -281,6 +313,7 @@ func (th *Tchs) commitRule(block *blockchain.Block) (bool, *blockchain.Block, er
 		return false, nil, fmt.Errorf("cannot commit any block: %w", err)
 	}
 	if (parentBlock.View + 1) == qc.View {
+		parentBlock.CommitFromThis = true
 		return true, parentBlock, nil
 	}
 	return false, nil, nil
@@ -298,13 +331,14 @@ func (th *Tchs) updatePreferredView(qc *blockchain.QC) error {
 	if qc.View < 2 {
 		return nil
 	}
-	_, err := th.bc.GetBlockByID(qc.BlockID)
+
+	parentBlock, err := th.bc.GetParentBlock(qc.BlockID)
 	if err != nil {
 		return fmt.Errorf("cannot update preferred view: %w", err)
 	}
-	if qc.View > th.preferredView {
+	if parentBlock.View > th.preferredView {
 		log.Debugf("[%v] preferred view has been updated to %v", th.ID(), qc.View)
-		th.preferredView = qc.View
+		th.preferredView = parentBlock.View
 	}
 	return nil
 }
