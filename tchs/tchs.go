@@ -92,11 +92,19 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 			// return nil
 		} else {
 			committedBlocks, forkedBlocks, err := th.bc.CommitBlock(b.ID, th.pm.GetCurView())
+			var heightestBlock *blockchain.Block
+
 			if err != nil {
 				return fmt.Errorf("[%v] cannot commit blocks", th.ID())
 			}
 			for _, cBlock := range committedBlocks {
 				th.committedBlocks <- cBlock
+				if heightestBlock == nil || int(cBlock.View) > int(heightestBlock.View) {
+					heightestBlock = cBlock
+				}
+			}
+			if heightestBlock != nil {
+				heightestBlock.CommitFromThis = true
 			}
 			for _, fBlock := range forkedBlocks {
 				th.forkedBlocks <- fBlock
@@ -141,7 +149,9 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (th *Tchs) ProcessVote(vote *blockchain.Vote) {
-
+	if th.IsByz() {
+		return
+	}
 	log.Debugf("[%v] is processing the vote from %v, block id: %x", th.ID(), vote.Voter, vote.BlockID)
 	if th.ID() != vote.Voter {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -184,9 +194,9 @@ func (th *Tchs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 }
 
 func (th *Tchs) ProcessLocalTmo(view types.View) {
-	th.pm.AdvanceView(view + 1)
+	// th.pm.AdvanceView(view + 1)
 	tmo := &pacemaker.TMO{
-		View:   view + 1,
+		View:   view,
 		NodeID: th.ID(),
 		HighQC: th.GetHighQC(),
 	}
@@ -290,19 +300,20 @@ func (th *Tchs) processCertificate(qc *blockchain.QC) {
 }
 
 func (th *Tchs) votingRule(block *blockchain.Block) (bool, error) {
-	if block.View <= 2 {
-		return true, nil
-	}
-	parentBlock, err := th.bc.GetParentBlock(block.ID)
-	if err != nil {
-		return false, fmt.Errorf("cannot vote for block: %w", err)
-	}
-	if (block.View <= th.lastVotedView) || (parentBlock.View < th.preferredView) {
-		if parentBlock.View < th.preferredView {
-			log.Debugf("[%v] parent block view is: %v and preferred view is: %v", th.ID(), parentBlock.View, th.preferredView)
-		}
-		return false, nil
-	}
+	// if block.View <= 2 {
+	// 	return true, nil
+	// }
+	// parentBlock, err := th.bc.GetParentBlock(block.ID)
+	// // 一点小小的bug，不知道为什么这里会拿不到parentBlock
+	// if err != nil {
+	// 	return false, fmt.Errorf("cannot vote for block: %w", err)
+	// }
+	// if (block.View <= th.lastVotedView) || (parentBlock.View < th.preferredView) {
+	// 	if parentBlock.View < th.preferredView {
+	// 		log.Debugf("[%v] parent block view is: %v and preferred view is: %v", th.ID(), parentBlock.View, th.preferredView)
+	// 	}
+	// 	return false, nil
+	// }
 	return true, nil
 }
 
@@ -313,7 +324,7 @@ func (th *Tchs) commitRule(block *blockchain.Block) (bool, *blockchain.Block, er
 		return false, nil, fmt.Errorf("cannot commit any block: %w", err)
 	}
 	if (parentBlock.View + 1) == qc.View {
-		parentBlock.CommitFromThis = true
+		// parentBlock.CommitFromThis = true
 		return true, parentBlock, nil
 	}
 	return false, nil, nil

@@ -27,8 +27,8 @@ add_ssh_key(){
     done
 }
 
-USERNAME="root"
-PASSWD=""
+USERNAME="gpt"
+PASSWD="175447"
 MAXPEERNUM=(`wc -l public_ips.txt | awk '{ print $1 }'`)
 CLIENTNUM=(`wc -l clients.txt | awk '{ print $1 }'`)
 

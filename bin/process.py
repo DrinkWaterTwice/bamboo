@@ -6,8 +6,8 @@ pattern = r'\[INFO\] (\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6}) (\w+\.go:\d+):
 
 
 # 获取log目录下的所有文件
-log_dir = '/home/gpt/cbft/yizhi/bamboo/bin/log'
-html_dir = '/home/gpt/cbft/yizhi/bamboo/bin/html'
+log_dir = '/home/gpt/cbft/bamboo/bin/log'
+html_dir = '/home/gpt/cbft/bamboo/bin/html'
 log_files = [f for f in os.listdir(log_dir) if os.path.isfile(os.path.join(log_dir, f))]
 
 for log_file in log_files:

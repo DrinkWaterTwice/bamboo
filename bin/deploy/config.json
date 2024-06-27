@@ -1,22 +1,33 @@
 {
   "address": {
-    "1": "tcp://127.0.0.1:3735"
+    "1": "tcp://10.16.106.144:3735",
+    "2": "tcp://10.16.106.209:3735",
+    "3": "tcp://10.16.106.205:3735",
+    "4": "tcp://10.16.106.147:3735"
   },
   "http_address": {
-    "1": "http://127.0.0.1:8070"
+    "1": "http://10.16.106.144:8070",
+    "2": "http://10.16.106.209:8070",
+    "3": "http://10.16.106.205:8070",
+    "4": "http://10.16.106.147:8070"
   },
   "policy": "majority",
   "threshold": 3,
-  "byzNo": 0,
-  "strategy": "silence",
+  "algo": "tchs",
+  "byzNo": 1,
+  "outputLog": false,
+  "broadcastQC": false,
+  "longest": false,
+  "strategy": "",
+  "forkATK": true,
+  "delayATK": false,
   "thrifty": false,
   "chan_buffer_size": 10240,
   "buffer_size": 10240,
   "multiversion": false,
-  "timeout": 1000,
+  "timeout": 70,
   "bsize": 100,
-  "msize": 1024,
-  "memsize": 10000,
+  "memsize": 50,
   "fixed": false,
   "payload_size": 0,
   "delta": 1,
@@ -29,8 +40,6 @@
   "derr": 0,
   "slow": 300,
   "crash": 20000,
-  "estimate_num": 3,
-  "estimate_window": 100,
   "benchmark": {
     "T": 1200,
     "N": 0,

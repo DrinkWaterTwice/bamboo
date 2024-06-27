@@ -160,7 +160,8 @@ func (r *Replica) handleQuery(m message.Query) {
 	r.thrus += fmt.Sprintf("maliBlock: %v. forkedBlock: %v. totalNo: %v. kindNo: %v.\n", r.maliNo, r.forkedNo*config.GetConfig().ByzNo, r.committedNo, r.kindNo)
 	r.thrus += fmt.Sprintf("chainQuality: %v.\n", float64(r.kindNo)/float64(r.committedNo))
 	r.thrus += fmt.Sprintf("censorship: %v.\n", float64(r.kindNo)/float64(r.kindNo+r.forkedNo*config.GetConfig().ByzNo))
-	r.thrus += fmt.Sprintf("view/commit: %v.\n", float64(r.pm.GetCurView())/float64(r.totolCommitTimes))
+	r.thrus += fmt.Sprintf("latency: %v.\n", float64(r.totolCommitTimes)/float64(r.pm.GetCurView()))
+	r.thrus += fmt.Sprintf("chain growth: %v.\n", float64(r.kindNo)/float64(r.pm.GetCurView()))
 	r.thrus += fmt.Sprintf("commitTimes: %v .\n", r.totolCommitTimes)
 	r.thrus += fmt.Sprintf("view: %v .\n", r.pm.GetCurView())
 	r.thrus += fmt.Sprintf("\n")
@@ -200,7 +201,7 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
 
-	if r.committedNo%1000 == 0 && r.ID().Node() == 1 && true {
+	if r.committedNo%1000 == 0 && r.ID().Node() == 1 && false {
 		// 打开文件，如果文件不存在则创建
 		indexFile, err := os.OpenFile(config.Configuration.Algorithm+"_index.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
@@ -257,6 +258,11 @@ func (r *Replica) processNewView(newView types.View) {
 	if !r.IsLeader(r.ID(), newView) {
 		return
 	}
+
+	if r.isByz {
+		return
+	}
+
 	r.proposeBlock(newView)
 }
 

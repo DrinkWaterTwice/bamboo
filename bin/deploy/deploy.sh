@@ -16,13 +16,15 @@ distribute(){
     for (( j=1; j<=$1; j++))
     do 
        ssh -t $2@${SERVER_ADDR[j-1]} mkdir bamboo
+       
        echo -e "---- upload replica ${j}: $2@${SERVER_ADDR[j-1]} \n ----"
-       scp server ips.txt $2@${SERVER_ADDR[j-1]}:/root/bamboo
+       scp server ips.txt $2@${SERVER_ADDR[j-1]}:bamboo
     done
 }
 
-USERNAME='root'
-MAXPEERNUM=(`wc -l public_ips.txt | awk '{ print $1 }'`)
-
+USERNAME='gpt'
+# MAXPEERNUM=(`wc -l public_ips.txt | awk '{ print $1 }'`)
+MAXPEERNUM=4 
+echo -e "total replicas: $MAXPEERNUM \n"
 # distribute files
 distribute $MAXPEERNUM $USERNAME
