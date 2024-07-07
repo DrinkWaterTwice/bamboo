@@ -1,24 +1,27 @@
 package pacemaker
 
 import (
-	"github.com/gitferry/bamboo/config"
 	"sync"
 	"time"
+
+	"github.com/gitferry/bamboo/config"
 
 	"github.com/gitferry/bamboo/types"
 )
 
 type Pacemaker struct {
-	curView           types.View
-	newViewChan       chan types.View
-	timeoutController *TimeoutController
-	mu                sync.Mutex
+	curView              types.View
+	newViewChan          chan types.View
+	timeoutController    *TimeoutController
+	viewChangeController *ViewChangeController
+	mu                   sync.Mutex
 }
 
 func NewPacemaker(n int) *Pacemaker {
 	pm := new(Pacemaker)
 	pm.newViewChan = make(chan types.View, 100)
 	pm.timeoutController = NewTimeoutController(n)
+	pm.viewChangeController = NewViewChangeController(n)
 	return pm
 }
 
@@ -27,6 +30,13 @@ func (p *Pacemaker) ProcessRemoteTmo(tmo *TMO) (bool, *TC) {
 		return false, nil
 	}
 	return p.timeoutController.AddTmo(tmo)
+}
+
+func (p *Pacemaker) ProcessRemoteVmo(vmo *VMO) (bool, *VC) {
+	if vmo.View < p.curView {
+		return false, nil
+	}
+	return p.viewChangeController.AddVmo(vmo)
 }
 
 func (p *Pacemaker) AdvanceView(view types.View) {

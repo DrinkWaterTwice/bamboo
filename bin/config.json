@@ -3,18 +3,20 @@
     "1": "tcp://127.0.0.1:3735",
     "2": "tcp://127.0.0.1:3736",
     "3": "tcp://127.0.0.1:3737",
-    "4": "tcp://127.0.0.1:3738"
+    "4": "tcp://127.0.0.1:3738",
+    "5": "tcp://127.0.0.1:3739"
   },
   "http_address": {
     "1": "http://127.0.0.1:8070",
     "2": "http://127.0.0.1:8071",
     "3": "http://127.0.0.1:8072",
-    "4": "http://127.0.0.1:8073"
+    "4": "http://127.0.0.1:8073",
+    "5": "http://127.0.0.1:8074"
   },
   "policy": "majority",
   "threshold": 3,
-  "algo": "tchs",
-  "byzNo": 1,
+  "algo": "hotstuff",
+  "byzNo": 0,
   "outputLog": false,
   "broadcastQC": false,
   "longest": false,
@@ -25,7 +27,7 @@
   "chan_buffer_size": 10240,
   "buffer_size": 10240,
   "multiversion": false,
-  "timeout": 70,
+  "timeout": 280,
   "bsize": 100,
   "memsize": 50,
   "fixed": false,

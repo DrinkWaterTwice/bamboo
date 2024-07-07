@@ -13,7 +13,19 @@ type TMO struct {
 	HighQC *blockchain.QC
 }
 
+type VMO struct {
+	View   types.View
+	NodeID identity.NodeID
+	HighQC *blockchain.QC
+}
+
 type TC struct {
+	types.View
+	crypto.AggSig
+	crypto.Signature
+}
+
+type VC struct {
 	types.View
 	crypto.AggSig
 	crypto.Signature
@@ -22,4 +34,9 @@ type TC struct {
 func NewTC(view types.View, requesters map[identity.NodeID]*TMO) *TC {
 	// TODO: add crypto
 	return &TC{View: view}
+}
+
+func NewVC(view types.View, requesters map[identity.NodeID]*VMO) *VC {
+
+	return &VC{View: view}
 }

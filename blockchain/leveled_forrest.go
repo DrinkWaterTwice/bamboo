@@ -152,6 +152,7 @@ func (f *LevelledForest) GetNumberOfVerticesAtLevel(level uint64) int {
 // requires that vertex would pass validity check LevelledForest.VerifyVertex(vertex).
 func (f *LevelledForest) AddVertex(vertex Vertex) {
 	if vertex.Level() < f.LowestLevel {
+		fmt.Errorf("attempted to add vertex below pruning level")
 		return
 	}
 	container := f.getOrCreateVertexContainer(vertex.VertexID(), vertex.Level())

@@ -6,9 +6,6 @@ import (
 	"os"
 	"time"
 
-	fhs "github.com/gitferry/bamboo/fasthostuff"
-	"github.com/gitferry/bamboo/lbft"
-
 	"go.uber.org/atomic"
 
 	"github.com/gitferry/bamboo/blockchain"
@@ -21,8 +18,6 @@ import (
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
-	"github.com/gitferry/bamboo/streamlet"
-	"github.com/gitferry/bamboo/tchs"
 	"github.com/gitferry/bamboo/types"
 )
 
@@ -92,23 +87,26 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	r.Register(pacemaker.TMO{}, r.HandleTmo)
 	r.Register(message.Transaction{}, r.handleTxn)
 	r.Register(message.Query{}, r.handleQuery)
+	r.Register(pacemaker.VMO{}, r.HandleVmo)
 	gob.Register(blockchain.Block{})
 	gob.Register(blockchain.Vote{})
 	gob.Register(pacemaker.TC{})
 	gob.Register(pacemaker.TMO{})
+	gob.Register(pacemaker.VC{})
+	gob.Register(pacemaker.VMO{})
 
 	// Is there a better way to reduce the number of parameters?
 	switch config.GetConfig().Algorithm {
 	case "hotstuff":
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	case "tchs":
-		r.Safety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	case "streamlet":
-		r.Safety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	case "lbft":
-		r.Safety = lbft.NewLbft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	case "fasthotstuff":
-		r.Safety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// case "tchs":
+	// 	r.Safety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// case "streamlet":
+	// 	r.Safety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// case "lbft":
+	// 	r.Safety = lbft.NewLbft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	// case "fasthotstuff":
+	// 	r.Safety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	default:
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
@@ -141,6 +139,14 @@ func (r *Replica) HandleTmo(tmo pacemaker.TMO) {
 	}
 	log.Debugf("[%v] received a timeout from %v for view %v", r.ID(), tmo.NodeID, tmo.View)
 	r.eventChan <- tmo
+}
+
+func (r *Replica) HandleVmo(vmo pacemaker.VMO) {
+	if vmo.View < r.pm.GetCurView() {
+		return
+	}
+	log.Debugf("[%v] received a vote from %v for view %v", r.ID(), vmo.NodeID, vmo.View)
+	r.eventChan <- vmo
 }
 
 // handleQuery replies a query with the statistics of the node
@@ -259,9 +265,9 @@ func (r *Replica) processNewView(newView types.View) {
 		return
 	}
 
-	if r.isByz {
-		return
-	}
+	// if r.isByz {
+	// 	return
+	// }
 
 	r.proposeBlock(newView)
 }
@@ -269,6 +275,9 @@ func (r *Replica) processNewView(newView types.View) {
 func (r *Replica) proposeBlock(view types.View) {
 	createStart := time.Now()
 	block := r.Safety.MakeProposal(view, r.pd.GeneratePayload())
+	if block == nil {
+		return
+	}
 	r.totalBlockSize += len(block.Payload)
 	r.proposedNo++
 	createEnd := time.Now()
@@ -362,6 +371,8 @@ func (r *Replica) Start() {
 			r.voteNo++
 		case pacemaker.TMO:
 			r.Safety.ProcessRemoteTmo(&v)
+		case pacemaker.VMO:
+			r.Safety.ProcessRemoteVmo(&v)
 		}
 	}
 }

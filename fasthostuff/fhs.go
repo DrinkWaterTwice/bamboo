@@ -67,11 +67,11 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 		return nil
 	}
 	f.bc.AddBlock(block)
-
+	// 这个地方不知道为什么会出现block不存在的情况,先注释了
 	log.Debugf("[%v] voting is processed, view: %v, id: %x", f.ID(), block.View, block.ID)
 	shouldVote, err := f.votingRule(block)
 	if err != nil {
-		log.Errorf("cannot decide whether to vote the block, %w", err)
+		// log.Errorf("cannot decide whether to vote the block, %w", err)
 		return err
 	}
 	if !shouldVote {
@@ -105,13 +105,23 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 		if !ok {
 			// return nil
 		} else {
+			// 为了统计commit的block（根据最大的view的block统计）
 			committedBlocks, forkedBlocks, err := f.bc.CommitBlock(b.ID, f.pm.GetCurView())
+			var heightestBlock *blockchain.Block
 			if err != nil {
 				return fmt.Errorf("[%v] cannot commit blocks", f.ID())
 			}
+
 			for _, cBlock := range committedBlocks {
 				f.committedBlocks <- cBlock
+				if heightestBlock == nil || int(cBlock.View) > int(heightestBlock.View) {
+					heightestBlock = cBlock
+				}
 			}
+			if heightestBlock != nil {
+				heightestBlock.CommitFromThis = true
+			}
+
 			for _, fBlock := range forkedBlocks {
 				f.forkedBlocks <- fBlock
 			}
@@ -146,6 +156,11 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
+
+	if f.IsByz() {
+		return
+	}
+
 	log.Debugf("[%v] is processing the vote from %v, block id: %x, view %v", f.ID(), vote.Voter, vote.BlockID, vote.View)
 	if f.ID() != vote.Voter {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -172,10 +187,8 @@ func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
 		return
 	}
 
+	// 如果是拜占庭节点，忽略形成的qc
 	if f.IsByz() && config.GetConfig().ForkATK && !block.Mali {
-		// if vote.View <= f.pm.GetCurView() {
-		// 	return
-		// }
 		f.pm.AdvanceView(qc.View)
 		return
 	}
@@ -185,9 +198,10 @@ func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
 
 func (f *Fhs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 	log.Debugf("[%v] is processing tmo from %v", f.ID(), tmo.NodeID)
-	if tmo.View < f.pm.GetCurView() {
-		return
-	}
+	// 这个会导致部分视图切换脱节，原因暂时不明
+	// if tmo.View < f.pm.GetCurView() {
+	// 	return
+	// }
 	isBuilt, tc := f.pm.ProcessRemoteTmo(tmo)
 	if !isBuilt {
 		log.Debugf("[%v] not enough tc for %v", f.ID(), tmo.View)
@@ -198,9 +212,9 @@ func (f *Fhs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 }
 
 func (f *Fhs) ProcessLocalTmo(view types.View) {
-	f.pm.AdvanceView(view + 1)
+	// f.pm.AdvanceView(view)
 	tmo := &pacemaker.TMO{
-		View:   view + 1,
+		View:   view,
 		NodeID: f.ID(),
 		HighQC: f.GetHighQC(),
 	}
@@ -220,7 +234,7 @@ func (f *Fhs) forkChoice() (*blockchain.QC, int) {
 	choice := f.GetHighQC()
 	forkNum := 0
 	if f.IsByz() {
-		choice.View = f.pm.GetCurView() - 1
+		// choice.View = f.pm.GetCurView() - 1
 		if f.FindLeaderFor(f.pm.GetCurView()+1).Node() > config.GetConfig().ByzNo {
 			forkNum = 1
 		}
@@ -262,8 +276,9 @@ func (f *Fhs) updateHighQC(qc *blockchain.QC) {
 
 func (f *Fhs) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a QC, block id: %x", f.ID(), qc.BlockID)
+	// silent攻击一定会导致收到的qc是stale的
 	if qc.View < f.pm.GetCurView() {
-		log.Debugf("[%v] received a stale qc, view: %v, current view: %v", f.ID(), qc.View, f.pm.GetCurView())
+		// log.Debugf("[%v] received a stale qc, view: %v, current view: %v", f.ID(), qc.View, f.pm.GetCurView())
 		return
 	}
 	if qc.Leader != f.ID() {

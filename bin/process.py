@@ -38,7 +38,7 @@ for log_file in log_files:
     blocksTrue = [block for block in blocks if block['commit_from_this'] == 'true']
     # print(blocks[:5])
     print(len(blocks)/ int(blocks[-1]['view']))
-    print(blocks[-1]['view']/len(blocksTrue))
+    print(len(blocksTrue)/blocks[-1]['view'])
     # 遍历排序后的blocks列表， 补充上被fork的区块
     current_view = 1
     for block in blocks:

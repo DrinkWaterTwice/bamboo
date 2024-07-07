@@ -275,9 +275,9 @@ func (th *Tchs) updateHighQC(qc *blockchain.QC) {
 
 func (th *Tchs) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a QC, block id: %x", th.ID(), qc.BlockID)
-	if qc.View < th.pm.GetCurView() {
-		return
-	}
+	// if qc.View < th.pm.GetCurView() {
+	// 	return
+	// }
 	if qc.Leader != th.ID() {
 		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
 		if quorumIsVerified == false {

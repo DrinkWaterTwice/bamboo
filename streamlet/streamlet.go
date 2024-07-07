@@ -72,9 +72,6 @@ func (sl *Streamlet) ProcessBlock(block *blockchain.Block) error {
 	// if block.Mali && block.GetForkNum() == 0 && sl.IsByz() {
 	// 	return nil
 	// }
-	if block.Mali && sl.IsByz() {
-		return nil
-	}
 
 	log.Debugf("[%v] is processing block, view: %v, id: %x", sl.ID(), block.View, block.ID)
 	curView := sl.pm.GetCurView()
@@ -144,10 +141,10 @@ func (sl *Streamlet) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (sl *Streamlet) MaliBroadcast(m interface{}, isVote bool) {
-	log.Debugf("[%v] is broadcasting a mali message", sl.ID())
+	// log.Debugf("[%v] is broadcasting a mali message", sl.ID())
 	// 恶意广播
 	// 一个时间延迟
-	deley := config.GetConfig().Timeout * 4 / 7
+	deley := config.GetConfig().Timeout * 5 / 7
 	// 找到下一个leader，如果是恶意节点，就广播给所有节点
 	nextLeaderId := sl.Election.FindLeaderFor(sl.pm.GetCurView() + 1).Node()
 	if nextLeaderId <= config.GetConfig().ByzNo {
@@ -155,7 +152,7 @@ func (sl *Streamlet) MaliBroadcast(m interface{}, isVote bool) {
 	} else if isVote {
 		nodeId := 1
 		deley := config.GetConfig().Timeout * 6 / 7
-		// 投票发给除leader外的所有节点
+		// 投票发给除leader外的所有节点. 这里排除掉了leader
 		for nodeId <= config.GetConfig().N()-1 {
 			if nodeId == nextLeaderId {
 				nodeId++
@@ -163,7 +160,7 @@ func (sl *Streamlet) MaliBroadcast(m interface{}, isVote bool) {
 			currentId := nodeId
 			delay := time.Duration(deley) * time.Millisecond
 			time.AfterFunc(delay, func() {
-				log.Debugf("[%v] is sending mali message to %v", sl.ID(), currentId)
+				// log.Debugf("[%v] is sending mali message to %v", sl.ID(), currentId)
 				sl.Send(identity.NewNodeID(currentId), m)
 			})
 			nodeId++
@@ -172,10 +169,10 @@ func (sl *Streamlet) MaliBroadcast(m interface{}, isVote bool) {
 		nodeId := 1
 		for nodeId <= config.GetConfig().N() {
 			currentId := nodeId
-			currentView := sl.pm.GetCurView()
+			// currentView := sl.pm.GetCurView()
 			delay := time.Duration(deley) * time.Millisecond
 			time.AfterFunc(delay, func() {
-				log.Debugf("[%v] is sending message to %v, currentView is %v", sl.ID(), currentId, currentView)
+				// log.Debugf("[%v] is sending message to %v, currentView is %v", sl.ID(), currentId, currentView)
 				sl.Send(identity.NewNodeID(currentId), m)
 			})
 			nodeId++
@@ -191,10 +188,10 @@ func (sl *Streamlet) NoMailBroadcast(m interface{}) {
 
 	for nodeId <= config.GetConfig().N() {
 		currentId := nodeId
-		currentView := sl.pm.GetCurView()
+		// currentView := sl.pm.GetCurView()
 		delay := time.Duration(deley) * time.Millisecond
 		time.AfterFunc(delay, func() {
-			log.Debugf("[%v] is sending message to %v, currentView is %v", sl.ID(), currentId, currentView)
+			// log.Debugf("[%v] is sending message to %v, currentView is %v", sl.ID(), currentId, currentView)
 			sl.Send(identity.NewNodeID(currentId), m)
 		})
 		nodeId++
@@ -234,7 +231,7 @@ func (sl *Streamlet) ProcessVote(vote *blockchain.Vote) {
 }
 
 func (sl *Streamlet) ProcessRemoteTmo(tmo *pacemaker.TMO) {
-	log.Debugf("[%v] is processing tmo from %v", sl.ID(), tmo.NodeID)
+	log.Debugf("[%v] is processing tmo from %v, current view is %v", sl.ID(), tmo.NodeID, sl.pm.GetCurView())
 	isBuilt, tc := sl.pm.ProcessRemoteTmo(tmo)
 	if !isBuilt {
 		log.Debugf("[%v] not enough tc for %v", sl.ID(), tmo.View)
@@ -255,45 +252,50 @@ func (sl *Streamlet) ProcessLocalTmo(view types.View) {
 
 func (sl *Streamlet) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
 
-	prevID := sl.forkChoice()
-	if sl.Election.FindLeaderFor(sl.pm.GetCurView()+1).Node() > config.GetConfig().ByzNo && sl.IsByz() {
-		// 如果是恶意节点，且下一个区块不是恶意区块，就生成一个恶意区块
-		block := blockchain.MakeBlock(view, &blockchain.QC{
-			View:      0,
-			BlockID:   prevID,
-			AggSig:    nil,
-			Signature: nil,
-		}, prevID, payload, sl.ID(), true, 1, 0)
-		return block
-
-	} else if sl.IsByz() {
-		block := blockchain.MakeBlock(view, &blockchain.QC{
-			View:      0,
-			BlockID:   prevID,
-			AggSig:    nil,
-			Signature: nil,
-		}, prevID, payload, sl.ID(), true, 0, 0)
-		return block
+	prevID, forkNum, silent := sl.forkChoice()
+	if silent {
+		return nil
 	}
-
 	block := blockchain.MakeBlock(view, &blockchain.QC{
 		View:      0,
 		BlockID:   prevID,
 		AggSig:    nil,
 		Signature: nil,
-	}, prevID, payload, sl.ID(), false, 0, 0)
+	}, prevID, payload, sl.ID(), sl.IsByz(), forkNum, 0)
 	return block
 }
 
-func (sl *Streamlet) forkChoice() crypto.Identifier {
+func (sl *Streamlet) forkChoice() (crypto.Identifier, int, bool) {
 	var prevID crypto.Identifier
+	var forkNum int
+	var silent bool
+	// 如果有双链结构
+	var height = sl.GetNotarizedHeight()
+	if height > 3 && sl.IsByz() {
+		lastBlocks := sl.notarizedChain[height-1]
+		secondBlocks := sl.notarizedChain[height-2]
+		if len(lastBlocks) == 1 && len(secondBlocks) == 1 {
+			if lastBlocks[0].View == secondBlocks[0].View+1 && lastBlocks[0].View+1 == sl.pm.GetCurView() {
+				silent = true
+				return prevID, 0, silent
+			}
+		}
+	}
+
 	if sl.GetNotarizedHeight() == 0 {
 		prevID = crypto.MakeID("Genesis block")
 	} else {
 		tailNotarizedBlock := sl.notarizedChain[sl.GetNotarizedHeight()-1][0]
 		prevID = tailNotarizedBlock.ID
 	}
-	return prevID
+
+	if sl.Election.FindLeaderFor(sl.pm.GetCurView()+1).Node() > config.GetConfig().ByzNo && sl.IsByz() {
+		forkNum = 1
+	} else {
+		forkNum = 0
+	}
+	silent = false
+	return prevID, forkNum, silent
 }
 
 func (sl *Streamlet) processTC(tc *pacemaker.TC) {
@@ -309,6 +311,7 @@ func (sl *Streamlet) processTC(tc *pacemaker.TC) {
 // 4. commit blocks
 func (sl *Streamlet) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a qc, view: %v, block id: %x", sl.ID(), qc.View, qc.BlockID)
+	// silent一定会导致view不一致
 	// if qc.View < sl.pm.GetCurView() {
 	// 	return
 	// }
@@ -331,6 +334,7 @@ func (sl *Streamlet) processCertificate(qc *blockchain.QC) {
 		log.Debugf("[%v] cannot notarize the block, %x: %w", sl.ID(), qc.BlockID, err)
 		return
 	}
+	sl.pm.AdvanceView(qc.View)
 	if qc.View < 3 {
 		return
 	}

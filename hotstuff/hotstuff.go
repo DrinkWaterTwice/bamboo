@@ -52,8 +52,7 @@ func NewHotStuff(
 }
 
 func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
-
-	log.Debugf("[%v] is processing block from %v, view: %v, id: %x, isFork: %v", hs.ID(), block.Proposer.Node(), block.View, block.ID, block.GetForkNum())
+	log.Debugf("[%v] is processing block from %v, view: %v, id: %x", hs.ID(), block.Proposer.Node(), block.View, block.ID)
 	curView := hs.pm.GetCurView()
 	if block.Proposer != hs.ID() {
 		blockIsVerified, _ := crypto.PubVerify(block.Sig, crypto.IDToByte(block.ID), block.Proposer)
@@ -74,7 +73,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	}
 	// does not have to process the QC if the replica is the proposer
 	if block.Proposer != hs.ID() {
-		hs.processCertificate(block.QC, block.View-1)
+		hs.processCertificate(block.QC)
 	}
 	curView = hs.pm.GetCurView()
 	if block.View < curView {
@@ -88,7 +87,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	// process buffered QC
 	qc, ok := hs.bufferedQCs[block.ID]
 	if ok {
-		hs.processCertificate(qc, block.View-1)
+		hs.processCertificate(qc)
 		delete(hs.bufferedQCs, block.ID)
 	}
 
@@ -120,10 +119,6 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
-	// if hs.IsByz(){
-	// 	return
-	// }
-
 	log.Debugf("[%v] is processing the vote, block id: %x", hs.ID(), vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -148,12 +143,14 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 		hs.bufferedQCs[qc.BlockID] = qc
 		return
 	}
-	hs.processCertificate(qc, vote.View)
+	hs.processCertificate(qc)
+	// hs.ProcessLocalVmo(qc.View)
+
 }
 
 func (hs *HotStuff) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 	log.Debugf("[%v] is processing tmo from %v", hs.ID(), tmo.NodeID)
-	hs.processCertificate(tmo.HighQC, tmo.View-1)
+	hs.processCertificate(tmo.HighQC)
 	isBuilt, tc := hs.pm.ProcessRemoteTmo(tmo)
 	if !isBuilt {
 		return
@@ -165,12 +162,40 @@ func (hs *HotStuff) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 	hs.pm.AdvanceView(view)
 	tmo := &pacemaker.TMO{
-		View:   view,
+		View:   view + 1,
 		NodeID: hs.ID(),
 		HighQC: hs.GetHighQC(),
 	}
 	hs.Broadcast(tmo)
 	hs.ProcessRemoteTmo(tmo)
+}
+
+func (hs *HotStuff) ProcessRemoteVmo(vmo *pacemaker.VMO) {
+	log.Debugf("[%v] is processing vmo from %v", hs.ID(), vmo.NodeID)
+	// hs.processCertificate(vmo.HighQC)
+	ok, _ := hs.bc.GetBlockByID(vmo.HighQC.BlockID)
+	if ok == nil {
+		hs.bufferedQCs[vmo.HighQC.BlockID] = vmo.HighQC
+	} else {
+		hs.processCertificate(vmo.HighQC)
+	}
+	// hs.pm.AdvanceView(vmo.View)
+
+}
+
+func (hs *HotStuff) ProcessLocalVmo(view types.View) {
+	vmo := &pacemaker.VMO{
+		View:   view,
+		NodeID: hs.ID(),
+		HighQC: hs.GetHighQC(),
+	}
+	hs.Broadcast(vmo)
+	hs.ProcessRemoteVmo(vmo)
+}
+
+func (hs *HotStuff) ProcessRemoteVc(tc *pacemaker.VC) {
+	// log.Debugf("[%v] is processing tc from %v", hs.ID(), c.NodeID)
+	// hs.processTC(vc)
 }
 
 func (hs *HotStuff) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
@@ -223,8 +248,8 @@ func (hs *HotStuff) forkRule() (*blockchain.QC, int, int) {
 		height = grandParBlock.GetHeight()
 	}
 	// to simulate Tc's view
-	// 如果advance的时候是block的就不会有问题了
-	// choice.View = hs.pm.GetCurView() - 1
+	//罗 不知道用来干嘛的，但是删了会出问题
+	choice.View = hs.pm.GetCurView() - 1
 	return choice, flag, height
 }
 
@@ -261,12 +286,11 @@ func (hs *HotStuff) updateHighQC(qc *blockchain.QC) {
 	}
 }
 
-// 做个尝试，将advance的时候的view修改为使用真实的view
-func (hs *HotStuff) processCertificate(qc *blockchain.QC, view types.View) {
+func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a QC, block id: %x", hs.ID(), qc.BlockID)
-	// if qc.View < hs.pm.GetCurView() {
-	// 	return
-	// }
+	if qc.View < hs.pm.GetCurView() {
+		return
+	}
 	if qc.Leader != hs.ID() {
 		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
 		if quorumIsVerified == false {
@@ -280,20 +304,11 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC, view types.View) {
 		log.Debugf("[%v] a qc is buffered, view: %v, id: %x", hs.ID(), qc.View, qc.BlockID)
 		return
 	}
-	hs.pm.AdvanceView(view)
+	hs.pm.AdvanceView(qc.View)
 	hs.updateHighQC(qc)
 	if qc.View < 3 {
 		return
 	}
-	// 如果要forked了，那就不可能在这里提交，直接跳过
-	// if hs.IsByz() && config.GetConfig().ForkATK {
-	// block, _ := hs.bc.GetBlockByID(qc.BlockID)
-	// if !block.GetMali() {
-	// 	return
-	// }
-
-	// }
-
 	ok, block, _ := hs.commitRule(qc)
 	if !ok {
 		return
@@ -304,15 +319,8 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC, view types.View) {
 		log.Errorf("[%v] cannot commit blocks, %w", hs.ID(), err)
 		return
 	}
-	var heightestBlock *blockchain.Block
 	for _, cBlock := range committedBlocks {
 		hs.committedBlocks <- cBlock
-		if heightestBlock == nil || int(cBlock.View) > int(heightestBlock.View) {
-			heightestBlock = cBlock
-		}
-	}
-	if heightestBlock != nil {
-		heightestBlock.CommitFromThis = true
 	}
 	for _, fBlock := range forkedBlocks {
 		hs.forkedBlocks <- fBlock
@@ -320,16 +328,16 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC, view types.View) {
 }
 
 func (hs *HotStuff) votingRule(block *blockchain.Block) (bool, error) {
-	// if block.View <= 2 {
-	// 	return true, nil
-	// }
-	// parentBlock, err := hs.bc.GetParentBlock(block.ID)
-	// if err != nil {
-	// 	return false, fmt.Errorf("cannot vote for block: %w", err)
-	// }
-	// if (block.View <= hs.lastVotedView) || (parentBlock.View < hs.preferredView) {
-	// 	return false, nil
-	// }
+	if block.View <= 2 {
+		return true, nil
+	}
+	parentBlock, err := hs.bc.GetParentBlock(block.ID)
+	if err != nil {
+		return false, fmt.Errorf("cannot vote for block: %w", err)
+	}
+	if parentBlock.View < hs.preferredView {
+		return false, nil
+	}
 	return true, nil
 }
 
@@ -343,7 +351,7 @@ func (hs *HotStuff) commitRule(qc *blockchain.QC) (bool, *blockchain.Block, erro
 		return false, nil, fmt.Errorf("cannot commit any block: %w", err)
 	}
 	if ((grandParentBlock.View + 1) == parentBlock.View) && ((parentBlock.View + 1) == qc.View) {
-		log.Debugf("three view numbers are: %v, %v, %v", grandParentBlock.View, parentBlock.View, qc.View)
+		grandParentBlock.CommitFromThis = true
 		return true, grandParentBlock, nil
 	}
 	return false, nil, nil
