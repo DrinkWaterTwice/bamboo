@@ -29,6 +29,8 @@ type HotStuff struct {
 	forkedBlocks    chan *blockchain.Block
 	bufferedQCs     map[crypto.Identifier]*blockchain.QC
 	bufferedBlocks  map[types.View]*blockchain.Block
+	recivedVMO      map[types.View]*pacemaker.VMO
+	recivedBlock    map[types.View]*blockchain.Block
 	mu              sync.Mutex
 }
 
@@ -45,6 +47,8 @@ func NewHotStuff(
 	hs.bc = blockchain.NewBlockchain(config.GetConfig().N())
 	hs.bufferedBlocks = make(map[types.View]*blockchain.Block)
 	hs.bufferedQCs = make(map[crypto.Identifier]*blockchain.QC)
+	hs.recivedVMO = make(map[types.View]*pacemaker.VMO)
+	hs.recivedBlock = make(map[types.View]*blockchain.Block)
 	hs.highQC = &blockchain.QC{View: 0}
 	hs.committedBlocks = committedBlocks
 	hs.forkedBlocks = forkedBlocks
@@ -53,6 +57,9 @@ func NewHotStuff(
 
 func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	log.Debugf("[%v] is processing block from %v, view: %v, id: %x", hs.ID(), block.Proposer.Node(), block.View, block.ID)
+	if hs.pm.GetCurView() < 1 {
+		hs.pm.AdvanceView(0)
+	}
 	curView := hs.pm.GetCurView()
 	if block.Proposer != hs.ID() {
 		blockIsVerified, _ := crypto.PubVerify(block.Sig, crypto.IDToByte(block.ID), block.Proposer)
@@ -60,12 +67,14 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 			log.Warningf("[%v] received a block with an invalid signature", hs.ID())
 		}
 	}
-	if block.View > curView+1 {
+	if block.View > curView {
 		//	buffer the block
 		hs.bufferedBlocks[block.View-1] = block
 		log.Debugf("[%v] the block is buffered, id: %x", hs.ID(), block.ID)
 		return nil
 	}
+	hs.recivedBlock[block.View-1] = block
+	hs.ProcessVMOAndBlock(block.View)
 	if block.QC != nil {
 		hs.updateHighQC(block.QC)
 	} else {
@@ -75,11 +84,11 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	if block.Proposer != hs.ID() {
 		hs.processCertificate(block.QC)
 	}
-	curView = hs.pm.GetCurView()
-	if block.View < curView {
-		log.Warningf("[%v] received a stale proposal from %v", hs.ID(), block.Proposer)
-		return nil
-	}
+	// curView = hs.pm.GetCurView()
+	// if block.View < curView {
+	// 	log.Warningf("[%v] received a stale proposal from %v", hs.ID(), block.Proposer)
+	// 	return nil
+	// }
 	if !hs.Election.IsLeader(block.Proposer, block.View) {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
@@ -89,6 +98,9 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 	if ok {
 		hs.processCertificate(qc)
 		delete(hs.bufferedQCs, block.ID)
+		if hs.FindLeaderFor(block.View+1) == hs.ID() {
+			hs.ProcessLocalVmo(block.View)
+		}
 	}
 
 	shouldVote, err := hs.votingRule(block)
@@ -119,6 +131,9 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
+	// if hs.IsByz() {
+	// 	return
+	// }
 	log.Debugf("[%v] is processing the vote, block id: %x", hs.ID(), vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -144,7 +159,7 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 		return
 	}
 	hs.processCertificate(qc)
-	// hs.ProcessLocalVmo(qc.View)
+	hs.ProcessLocalVmo(hs.pm.GetCurView())
 
 }
 
@@ -160,9 +175,9 @@ func (hs *HotStuff) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 }
 
 func (hs *HotStuff) ProcessLocalTmo(view types.View) {
-	hs.pm.AdvanceView(view)
+	// hs.pm.AdvanceView(view)
 	tmo := &pacemaker.TMO{
-		View:   view + 1,
+		View:   view,
 		NodeID: hs.ID(),
 		HighQC: hs.GetHighQC(),
 	}
@@ -171,17 +186,60 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 }
 
 func (hs *HotStuff) ProcessRemoteVmo(vmo *pacemaker.VMO) {
-	log.Debugf("[%v] is processing vmo from %v", hs.ID(), vmo.NodeID)
-	// hs.processCertificate(vmo.HighQC)
-	ok, _ := hs.bc.GetBlockByID(vmo.HighQC.BlockID)
-	if ok == nil {
-		hs.bufferedQCs[vmo.HighQC.BlockID] = vmo.HighQC
-	} else {
-		hs.processCertificate(vmo.HighQC)
+	nextLeaderId := hs.FindLeaderFor(vmo.View + 1)
+	// if the replica is the next leader， try to build a vc to change the view
+	if nextLeaderId == hs.ID() {
+		isBuilt, vc := hs.pm.ProcessRemoteVmo(vmo)
+		if !isBuilt {
+			return
+		}
+		hs.ProcessRemoteVc(vc)
 	}
-	// hs.pm.AdvanceView(vmo.View)
-
+	// if the replica is not the next leader, send the vmo to the next leader,
+	// and try to change the view when vmo and block are received
+	if nextLeaderId != hs.ID() {
+		log.Debugf("[%v] is processing vmo, view: %v, from: %v, current view is %v", hs.ID(), vmo.View, vmo.NodeID, hs.pm.GetCurView())
+		hs.recivedVMO[vmo.View-1] = vmo
+		if hs.pm.GetCurView() < 1 {
+			hs.pm.AdvanceView(0)
+		}
+		if hs.pm.GetCurView() < vmo.View {
+			return
+		}
+		ok := hs.ProcessVMOAndBlock(vmo.View)
+		// recusive call
+		if ok {
+			vmo, ok := hs.recivedVMO[vmo.View]
+			if ok {
+				hs.ProcessRemoteVmo(vmo)
+			}
+		}
+	}
 }
+
+func (hs *HotStuff) ProcessVMOAndBlock(view types.View) bool {
+	vmo, ok := hs.recivedVMO[view-1]
+	if !ok {
+		return false
+	}
+	_, ok = hs.recivedBlock[view-1]
+	if !ok {
+		return false
+	}
+	nextLeaderId := hs.FindLeaderFor(view + 1)
+	vmo.NodeID = hs.ID()
+	if nextLeaderId != hs.ID() {
+		log.Debugf("[%v] is postback vmo, view: %v", hs.ID(), view)
+		hs.Send(nextLeaderId, vmo)
+	}
+	delete(hs.recivedVMO, view-1)
+	delete(hs.recivedBlock, view-1)
+	hs.pm.AdvanceView(view)
+
+	return true
+}
+
+// send a vmo to other replicas, and process the vmo locally
 
 func (hs *HotStuff) ProcessLocalVmo(view types.View) {
 	vmo := &pacemaker.VMO{
@@ -189,13 +247,13 @@ func (hs *HotStuff) ProcessLocalVmo(view types.View) {
 		NodeID: hs.ID(),
 		HighQC: hs.GetHighQC(),
 	}
+	log.Debugf("[%v] is broadcast vmo, view: %v", hs.ID(), view)
 	hs.Broadcast(vmo)
 	hs.ProcessRemoteVmo(vmo)
 }
 
-func (hs *HotStuff) ProcessRemoteVc(tc *pacemaker.VC) {
-	// log.Debugf("[%v] is processing tc from %v", hs.ID(), c.NodeID)
-	// hs.processTC(vc)
+func (hs *HotStuff) ProcessRemoteVc(vc *pacemaker.VC) {
+	hs.pm.AdvanceView(vc.View)
 }
 
 func (hs *HotStuff) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
@@ -249,7 +307,7 @@ func (hs *HotStuff) forkRule() (*blockchain.QC, int, int) {
 	}
 	// to simulate Tc's view
 	//罗 不知道用来干嘛的，但是删了会出问题
-	choice.View = hs.pm.GetCurView() - 1
+	// choice.View = hs.pm.GetCurView() - 1
 	return choice, flag, height
 }
 
@@ -288,9 +346,9 @@ func (hs *HotStuff) updateHighQC(qc *blockchain.QC) {
 
 func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 	log.Debugf("[%v] is processing a QC, block id: %x", hs.ID(), qc.BlockID)
-	if qc.View < hs.pm.GetCurView() {
-		return
-	}
+	// if qc.View < hs.pm.GetCurView() {
+	// 	return
+	// }
 	if qc.Leader != hs.ID() {
 		quorumIsVerified, _ := crypto.VerifyQuorumSignature(qc.AggSig, qc.BlockID, qc.Signers)
 		if quorumIsVerified == false {
@@ -304,7 +362,7 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 		log.Debugf("[%v] a qc is buffered, view: %v, id: %x", hs.ID(), qc.View, qc.BlockID)
 		return
 	}
-	hs.pm.AdvanceView(qc.View)
+	// hs.pm.AdvanceView(qc.View)
 	hs.updateHighQC(qc)
 	if qc.View < 3 {
 		return

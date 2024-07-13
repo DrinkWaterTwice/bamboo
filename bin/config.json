@@ -16,7 +16,7 @@
   "policy": "majority",
   "threshold": 3,
   "algo": "hotstuff",
-  "byzNo": 0,
+  "byzNo": 1,
   "outputLog": false,
   "broadcastQC": false,
   "longest": false,
