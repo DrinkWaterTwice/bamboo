@@ -265,9 +265,9 @@ func (r *Replica) processNewView(newView types.View) {
 		return
 	}
 
-	// if r.isByz {
-	// 	return
-	// }
+	if r.isByz {
+		return
+	}
 
 	r.proposeBlock(newView)
 }

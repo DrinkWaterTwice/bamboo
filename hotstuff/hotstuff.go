@@ -93,6 +93,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
 	hs.bc.AddBlock(block)
+
 	// process buffered QC
 	qc, ok := hs.bufferedQCs[block.ID]
 	if ok {
@@ -127,13 +128,14 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 		_ = hs.ProcessBlock(b)
 		delete(hs.bufferedBlocks, block.View)
 	}
+
 	return nil
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
-	// if hs.IsByz() {
-	// 	return
-	// }
+	if hs.IsByz() {
+		return
+	}
 	log.Debugf("[%v] is processing the vote, block id: %x", hs.ID(), vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -222,10 +224,17 @@ func (hs *HotStuff) ProcessVMOAndBlock(view types.View) bool {
 	if !ok {
 		return false
 	}
+	if hs.bufferedBlocks[view-1] != nil {
+		block := hs.bufferedBlocks[view-1]
+		delete(hs.bufferedBlocks, view-1)
+		hs.ProcessBlock(block)
+	}
 	_, ok = hs.recivedBlock[view-1]
 	if !ok {
 		return false
 	}
+	// if block haven't been processed, process the block
+
 	nextLeaderId := hs.FindLeaderFor(view + 1)
 	vmo.NodeID = hs.ID()
 	if nextLeaderId != hs.ID() {
@@ -234,6 +243,7 @@ func (hs *HotStuff) ProcessVMOAndBlock(view types.View) bool {
 	}
 	delete(hs.recivedVMO, view-1)
 	delete(hs.recivedBlock, view-1)
+
 	hs.pm.AdvanceView(view)
 
 	return true
