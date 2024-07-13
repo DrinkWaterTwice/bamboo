@@ -11,6 +11,7 @@ import (
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/election"
+	fhs "github.com/gitferry/bamboo/fasthostuff"
 	"github.com/gitferry/bamboo/hotstuff"
 	"github.com/gitferry/bamboo/identity"
 	"github.com/gitferry/bamboo/log"
@@ -106,8 +107,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	// 	r.Safety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	// case "lbft":
 	// 	r.Safety = lbft.NewLbft(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "fasthotstuff":
-	// 	r.Safety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	case "fasthotstuff":
+		r.Safety = fhs.NewFhs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	default:
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	}
