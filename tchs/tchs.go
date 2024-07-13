@@ -28,6 +28,8 @@ type Tchs struct {
 	forkedBlocks    chan *blockchain.Block
 	bufferedQCs     map[crypto.Identifier]*blockchain.QC
 	bufferedBlocks  map[types.View]*blockchain.Block
+	recivedVMO      map[types.View]*pacemaker.VMO
+	recivedBlock    map[types.View]*blockchain.Block
 	highQC          *blockchain.QC
 	mu              sync.Mutex
 }
@@ -45,6 +47,8 @@ func NewTchs(
 	th.bc = blockchain.NewBlockchain(config.GetConfig().N())
 	th.bufferedBlocks = make(map[types.View]*blockchain.Block)
 	th.bufferedQCs = make(map[crypto.Identifier]*blockchain.QC)
+	th.recivedVMO = make(map[types.View]*pacemaker.VMO)
+	th.recivedBlock = make(map[types.View]*blockchain.Block)
 	th.highQC = &blockchain.QC{View: 0}
 	th.committedBlocks = committedBlocks
 	th.forkedBlocks = forkedBlocks
@@ -53,6 +57,10 @@ func NewTchs(
 
 func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 	log.Debugf("[%v] is processing block, view: %v, id: %x", th.ID(), block.View, block.ID)
+	// only leader start with 1 view， so must let other replicas to start with 1 view
+	if th.pm.GetCurView() < 1 {
+		th.pm.AdvanceView(0)
+	}
 	curView := th.pm.GetCurView()
 	if block.Proposer != th.ID() {
 		blockIsVerified, _ := crypto.PubVerify(block.Sig, crypto.IDToByte(block.ID), block.Proposer)
@@ -60,12 +68,14 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 			log.Warningf("[%v] received a block with an invalid signature", th.ID())
 		}
 	}
-	if block.View > curView+1 {
+	if block.View > curView {
 		//	buffer the block
 		th.bufferedBlocks[block.View-1] = block
 		log.Debugf("[%v] the block is buffered, view: %v, current view is: %v, id: %x", th.ID(), block.View, curView, block.ID)
 		return nil
 	}
+	th.recivedBlock[block.View-1] = block
+	th.ProcessVMOAndBlock(block.View)
 	if block.QC != nil {
 		th.updateHighQC(block.QC)
 	} else {
@@ -74,11 +84,11 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 	if block.Proposer != th.ID() {
 		th.processCertificate(block.QC)
 	}
-	curView = th.pm.GetCurView()
-	if block.View < curView {
-		log.Warningf("[%v] received a stale proposal from %v, block view: %v, current view: %v, block id: %x", th.ID(), block.Proposer, block.View, curView, block.ID)
-		return nil
-	}
+	// curView = th.pm.GetCurView()
+	// if block.View < curView {
+	// 	log.Warningf("[%v] received a stale proposal from %v, block view: %v, current view: %v, block id: %x", th.ID(), block.Proposer, block.View, curView, block.ID)
+	// 	return nil
+	// }
 	if !th.Election.IsLeader(block.Proposer, block.View) {
 		return fmt.Errorf("received a proposal (%v) from an invalid leader (%v)", block.View, block.Proposer)
 	}
@@ -118,6 +128,9 @@ func (th *Tchs) ProcessBlock(block *blockchain.Block) error {
 	if ok {
 		th.processCertificate(qc)
 		delete(th.bufferedQCs, block.ID)
+		if th.FindLeaderFor(block.View+1) == th.ID() {
+			th.ProcessLocalVmo(block.View)
+		}
 	}
 
 	shouldVote, err := th.votingRule(block)
@@ -176,6 +189,7 @@ func (th *Tchs) ProcessVote(vote *blockchain.Vote) {
 		return
 	}
 	th.processCertificate(qc)
+	th.ProcessLocalVmo(th.pm.GetCurView())
 }
 
 func (th *Tchs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
@@ -194,7 +208,6 @@ func (th *Tchs) ProcessRemoteTmo(tmo *pacemaker.TMO) {
 }
 
 func (th *Tchs) ProcessLocalTmo(view types.View) {
-	// th.pm.AdvanceView(view + 1)
 	tmo := &pacemaker.TMO{
 		View:   view,
 		NodeID: th.ID(),
@@ -203,6 +216,89 @@ func (th *Tchs) ProcessLocalTmo(view types.View) {
 	th.Broadcast(tmo)
 	th.ProcessRemoteTmo(tmo)
 	log.Debugf("[%v] broadcast is done for sending tmo", th.ID())
+}
+
+func (th *Tchs) ProcessRemoteVmo(vmo *pacemaker.VMO) {
+	nextLeaderId := th.FindLeaderFor(vmo.View + 1)
+	// if the replica is the next leader， try to build a vc to change the view
+	if nextLeaderId == th.ID() {
+		isBuilt, vc := th.pm.ProcessRemoteVmo(vmo)
+		if !isBuilt {
+			return
+		}
+		th.ProcessRemoteVc(vc)
+	}
+	// if the replica is not the next leader, send the vmo to the next leader,
+	// and try to change the view when vmo and block are received
+	if nextLeaderId != th.ID() {
+		log.Debugf("[%v] is processing vmo, view: %v, from: %v, current view is %v", th.ID(), vmo.View, vmo.NodeID, th.pm.GetCurView())
+		if th.pm.GetCurView() < 1 {
+			th.pm.AdvanceView(0)
+		}
+
+		th.recivedVMO[vmo.View-1] = vmo
+		if th.pm.GetCurView() < 1 {
+			th.pm.AdvanceView(0)
+		}
+		if th.pm.GetCurView() < vmo.View {
+			return
+		}
+		ok := th.ProcessVMOAndBlock(vmo.View)
+		// recusive call
+		if ok {
+			vmo, ok := th.recivedVMO[vmo.View]
+			if ok {
+				th.ProcessRemoteVmo(vmo)
+			}
+		}
+	}
+}
+
+func (th *Tchs) ProcessVMOAndBlock(view types.View) bool {
+	vmo, ok := th.recivedVMO[view-1]
+	if !ok {
+		return false
+	}
+	if th.bufferedBlocks[view-1] != nil {
+		block := th.bufferedBlocks[view-1]
+		delete(th.bufferedBlocks, view-1)
+		th.ProcessBlock(block)
+	}
+	_, ok = th.recivedBlock[view-1]
+	if !ok {
+		return false
+	}
+	// if block haven't been processed, process the block
+
+	nextLeaderId := th.FindLeaderFor(view + 1)
+	vmo.NodeID = th.ID()
+	if nextLeaderId != th.ID() {
+		log.Debugf("[%v] is postback vmo, view: %v", th.ID(), view)
+		th.Send(nextLeaderId, vmo)
+	}
+	delete(th.recivedVMO, view-1)
+	delete(th.recivedBlock, view-1)
+
+	th.pm.AdvanceView(view)
+
+	return true
+}
+
+// send a vmo to other replicas, and process the vmo locally
+
+func (th *Tchs) ProcessLocalVmo(view types.View) {
+	vmo := &pacemaker.VMO{
+		View:   view,
+		NodeID: th.ID(),
+		HighQC: th.GetHighQC(),
+	}
+	log.Debugf("[%v] is broadcast vmo, view: %v", th.ID(), view)
+	th.Broadcast(vmo)
+	th.ProcessRemoteVmo(vmo)
+}
+
+func (th *Tchs) ProcessRemoteVc(vc *pacemaker.VC) {
+	th.pm.AdvanceView(vc.View)
 }
 
 func (th *Tchs) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
@@ -220,19 +316,19 @@ func (th *Tchs) forkChoice() (*blockchain.QC, int, int) {
 	return th.GetHighQC(), 0, 0
 }
 
-func (hs *Tchs) forkRule() (*blockchain.QC, int, int) {
+func (th *Tchs) forkRule() (*blockchain.QC, int, int) {
 	var flag int = 0
 	var height int = 0
 	var choice *blockchain.QC
 	//罗要fork的block的parent block
-	parBlockID := hs.GetHighQC().BlockID
-	parBlock, err := hs.bc.GetBlockByID(parBlockID)
+	parBlockID := th.GetHighQC().BlockID
+	parBlock, err := th.bc.GetBlockByID(parBlockID)
 	if err != nil {
 		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
 	}
-	if parBlock.View < hs.preferredView || parBlock.GetMali() {
+	if parBlock.View < th.preferredView || parBlock.GetMali() {
 		flag = 0
-		choice = hs.GetHighQC()
+		choice = th.GetHighQC()
 		height = 0
 		return choice, flag, height
 	} else {
@@ -242,7 +338,7 @@ func (hs *Tchs) forkRule() (*blockchain.QC, int, int) {
 	}
 
 	// to simulate Tc's view
-	choice.View = hs.pm.GetCurView() - 1
+	choice.View = th.pm.GetCurView() - 1
 	return choice, flag, height
 }
 
@@ -285,10 +381,6 @@ func (th *Tchs) processCertificate(qc *blockchain.QC) {
 			return
 		}
 	}
-	// if th.IsByz() && config.GetConfig().ForkATK && th.IsLeader(th.ID(), qc.View+1) {
-	// 	th.pm.AdvanceView(qc.View)
-	// 	return
-	// }
 	err := th.updatePreferredView(qc)
 	if err != nil {
 		th.bufferedQCs[qc.BlockID] = qc
@@ -296,7 +388,7 @@ func (th *Tchs) processCertificate(qc *blockchain.QC) {
 		return
 	}
 	th.updateHighQC(qc)
-	th.pm.AdvanceView(qc.View)
+	// th.pm.AdvanceView(qc.View)
 }
 
 func (th *Tchs) votingRule(block *blockchain.Block) (bool, error) {

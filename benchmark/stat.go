@@ -42,6 +42,10 @@ func (s Stat) String() string {
 
 // Statistic function creates Stat object from raw latency data
 func Statistic(latency []time.Duration) Stat {
+	if len(latency) == 0 {
+		return Stat{}
+	}
+
 	ms := make([]float64, 0)
 	for _, l := range latency {
 		ms = append(ms, float64(l.Nanoseconds())/1000000.0)

@@ -18,6 +18,7 @@ import (
 	"github.com/gitferry/bamboo/message"
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
+	"github.com/gitferry/bamboo/tchs"
 	"github.com/gitferry/bamboo/types"
 )
 
@@ -99,8 +100,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	switch config.GetConfig().Algorithm {
 	case "hotstuff":
 		r.Safety = hotstuff.NewHotStuff(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
-	// case "tchs":
-	// 	r.Safety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
+	case "tchs":
+		r.Safety = tchs.NewTchs(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	// case "streamlet":
 	// 	r.Safety = streamlet.NewStreamlet(r.Node, r.pm, r.Election, r.committedBlocks, r.forkedBlocks)
 	// case "lbft":

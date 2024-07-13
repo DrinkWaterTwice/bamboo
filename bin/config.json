@@ -15,7 +15,7 @@
   },
   "policy": "majority",
   "threshold": 3,
-  "algo": "hotstuff",
+  "algo": "tchs",
   "byzNo": 1,
   "outputLog": false,
   "broadcastQC": false,

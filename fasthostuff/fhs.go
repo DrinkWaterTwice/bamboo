@@ -67,8 +67,6 @@ func (f *Fhs) ProcessBlock(block *blockchain.Block) error {
 		return nil
 	}
 	f.bc.AddBlock(block)
-	// 这个地方不知道为什么会出现block不存在的情况,先注释了
-	log.Debugf("[%v] voting is processed, view: %v, id: %x", f.ID(), block.View, block.ID)
 	shouldVote, err := f.votingRule(block)
 	if err != nil {
 		// log.Errorf("cannot decide whether to vote the block, %w", err)
@@ -188,6 +186,7 @@ func (f *Fhs) ProcessVote(vote *blockchain.Vote) {
 	}
 
 	// 如果是拜占庭节点，忽略形成的qc
+	// 假装形成了qc，通知其他节点进入new view
 	if f.IsByz() && config.GetConfig().ForkATK && !block.Mali {
 		f.pm.AdvanceView(qc.View)
 		return
