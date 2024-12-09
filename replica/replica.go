@@ -3,12 +3,13 @@ package replica
 import (
 	"encoding/gob"
 	"fmt"
-	fhs "github.com/gitferry/bamboo/fasthostuff"
-	"github.com/gitferry/bamboo/lbft"
 	"time"
 
+	fhs "github.com/gitferry/bamboo/fasthostuff"
+	"github.com/gitferry/bamboo/lbft"
 	"go.uber.org/atomic"
 
+	"github.com/gitferry/bamboo/DQN"
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
 	"github.com/gitferry/bamboo/election"
@@ -38,6 +39,8 @@ type Replica struct {
 	forkedBlocks    chan *blockchain.Block
 	eventChan       chan interface{}
 
+	gs *DQN.GlobalState
+
 	/* for monitoring node statistics */
 	thrus                string
 	lastViewTime         time.Time
@@ -63,6 +66,7 @@ type Replica struct {
 
 // NewReplica creates a new replica instance
 func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
+	log.Infof("[%v] is created", id)
 	r := new(Replica)
 	r.Node = node.NewNode(id, isByz)
 	if isByz {
@@ -90,6 +94,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TC{})
 	gob.Register(pacemaker.TMO{})
 
+	r.gs = DQN.GetGlobalState()
+
 	// Is there a better way to reduce the number of parameters?
 	switch alg {
 	case "hotstuff":
@@ -114,6 +120,8 @@ func (r *Replica) HandleBlock(block blockchain.Block) {
 	r.receivedNo++
 	r.startSignal()
 	log.Debugf("[%v] received a block from %v, view is %v, id: %x, prevID: %x", r.ID(), block.Proposer, block.View, block.ID, block.PrevID)
+	r.gs.UpdateBlockGenerationRate(int(block.View))
+	r.gs.UpdateConsensusStage(int(block.View), 1)
 	r.eventChan <- block
 }
 
@@ -123,6 +131,7 @@ func (r *Replica) HandleVote(vote blockchain.Vote) {
 	}
 	r.startSignal()
 	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
+	r.gs.UpdateConsensusStage(int(vote.View), 1)
 	r.eventChan <- vote
 }
 
@@ -175,6 +184,8 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 			r.latencyNo++
 		}
 	}
+	r.gs.UpdateBlockCommitRate(int(block.View))
+	r.gs.Print()
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
 	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
@@ -187,6 +198,7 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 			r.pd.CollectTxn(txn)
 		}
 	}
+	r.gs.UpdateForkRate(int(block.View), int(r.pm.GetCurView()))
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 
@@ -266,6 +278,7 @@ func (r *Replica) startSignal() {
 
 // Start starts event loop
 func (r *Replica) Start() {
+	log.Debugf("[%v] is starting", r.ID())
 	go r.Run()
 	// wait for the start signal
 	<-r.start
