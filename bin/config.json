@@ -13,7 +13,7 @@
   },
   "policy": "majority",
   "threshold": 3,
-  "byzNo": 0,
+  "byzNo": 1,
   "thrifty": false,
   "chan_buffer_size": 1024,
   "buffer_size": 1024,
@@ -21,6 +21,8 @@
   "timeout": 1000,
   "bsize":20,
   "delta": 1,
+  "delay": 100,
+  "derr": 10,
   "benchmark": {
     "T": 20,
     "N": 0,

@@ -7,7 +7,7 @@ go build ../server/
 if [ -z "${SERVER_PID}" ]; then
     for id in $(seq 1 4); do
         echo "Process id for server ${id} is written to location: ${SERVER_PID_FILE}"
-        ./server -id ${id} -log_dir=. -log_level=debug -algorithm=hotstuff &
+        ./server -id ${id} -log_dir=log -log_level=debug -algorithm=hotstuff &
         echo $! >> ${SERVER_PID_FILE}
     done
 else
@@ -22,7 +22,7 @@ PID=$(cat "${PID_FILE}");
 if [ -z "${PID}" ]; then
     echo "Process id for clients is written to location: {$PID_FILE}"
     go build ../client/
-    ./client&
+     ./client > /dev/null 2>&1 &
     echo $! >> ${PID_FILE}
 else
     echo "Clients are already started in this folder."

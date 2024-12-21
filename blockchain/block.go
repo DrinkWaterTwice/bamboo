@@ -19,6 +19,7 @@ type Block struct {
 	Sig       crypto.Signature
 	ID        crypto.Identifier
 	Ts        time.Duration
+	Mali 			bool
 }
 
 type rawBlock struct {
@@ -40,6 +41,7 @@ func MakeBlock(view types.View, qc *QC, prevID crypto.Identifier, payload []*mes
 	b.Payload = payload
 	b.PrevID = prevID
 	b.makeID(proposer)
+	b.Mali = false
 	return b
 }
 

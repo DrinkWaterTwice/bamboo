@@ -16,18 +16,17 @@ else
 	rm "${PID_FILE}"
 fi
 
-
-PID_FILE=master.pid
+PID_FILE=client.pid
 
 if [ ! -f "${PID_FILE}" ]; then
-    echo "No master is running."
+    echo "No client is running."
 else
 	while read pid; do
 		if [ -z "${pid}" ]; then
-			echo "No master is running."
+			echo "No client is running."
 		else
 			kill -15 "${pid}"
-			echo "Master with PID ${pid} shutdown."
+			echo "Client with PID ${pid} shutdown."
     	fi
 	done < "${PID_FILE}"
 	rm "${PID_FILE}"

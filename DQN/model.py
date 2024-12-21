@@ -1,81 +1,85 @@
-# 状态空间为
-# 发起请求的节点
-# 当前主节点
-# 节点间的延迟 n * n
-# 当前所有节点采取的策略
-
-
-# 输出为节点n的策略，为a * n 维，a为动作数量，n为针对每个其他节点的单独动作
-# 动作从[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9]中进行选择
-
-
 import torch
 import torch.nn as nn
-import torch.optim as optim
+import torch.nn.functional as F
+from torch.distributions import Categorical
 import numpy as np
 
-class DQN(nn.Module):
-    def __init__(self, input_dim, output_dim):
-        super(DQN, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 256)
-        self.fc3 = nn.Linear(256, output_dim)
 
-    def forward(self, x):
-        x = torch.relu(self.fc1(x))
-        x = torch.relu(self.fc2(x))
-        x = self.fc3(x)
-        return x
+class A2CModel(nn.Module):
+    def __init__(self, state_dim, action_dim, embedding_dims = 32):
+        super(A2CModel, self).__init__()
+        
+        # Embedding layers for discrete features
+        self.role_embedding = nn.Embedding(10, embedding_dims)  # Assuming max 10 roles
+        self.consensus_stage_embedding = nn.Embedding(10, embedding_dims)  # Assuming max 10 stages
+        
+        # Shared layers for feature extraction
+        self.shared_fc = nn.Sequential(
+            nn.Linear(state_dim + 2 * embedding_dims - 2, 128),  # Adjust input size after embedding
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU()
+        )
+        
+        # Actor network (policy head)
+        self.actor = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, action_dim),
+            nn.Softmax(dim=-1)
+        )
+        
+        # Critic network (value head)
+        self.critic = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1)
+        )
 
-class DQNAgent:
-    def __init__(self, input_dim, output_dim, lr=0.0001):
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.model = DQN(input_dim, output_dim)
-        self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
-        self.criterion = nn.MSELoss()
-        self.experience_replay = []
+    def forward(self, state):
+        # Extract discrete features and continuous features
+        node_id, primary_id, role,preViewRole, byz_ratio, consensus_stage, vote_ratio, block_gen_rate, block_commit_rate, fork_rate, throughput, latency = state
 
-    def train(self):
-        self.model.train()
+        # Handle embeddings for discrete features
+        role_embedded = self.role_embedding(torch.tensor(role).long())
+        consensus_stage_embedded = self.consensus_stage_embedding(torch.tensor(consensus_stage).long())
+        # preViewRole = np.array(preViewRole)
+        # Concatenate all features
+        preViewRole_tensor = torch.tensor(preViewRole)
+        continuous_features = torch.tensor([node_id, primary_id, byz_ratio, vote_ratio, block_gen_rate, block_commit_rate, fork_rate, throughput, latency],dtype=torch.float32)
+        continuous_features = torch.cat([continuous_features, preViewRole_tensor], dim=-1)
+        state_features = torch.cat([continuous_features, role_embedded, consensus_stage_embedded], dim=-1)
 
-        for state, action, reward, next_state in self.experience_replay:
-            state = torch.tensor(state, dtype=torch.float32)
-            action = torch.tensor(action, dtype=torch.long)
-            reward = torch.tensor(reward, dtype=torch.float32)
-            next_state = torch.tensor(next_state, dtype=torch.float32)
-            action = action.flatten()
-            current_q = self.model(state).reshape(-1, 9)
-            current_q = current_q.gather(1, action.unsqueeze(-1))
-            current_q = current_q.squeeze()
-            # print(current_q.shape)
-            next_q = self.model(next_state).view(-1, 9)
-            top_k_values, top_k_indices = next_q.topk(1, dim=1)
-            top_k_values = top_k_values.squeeze()
-            target_q = reward + 0.99 * top_k_values
-            loss = self.criterion(current_q, target_q)
-            self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+        # Handle missing values in the state by replacing NaNs with zeros
+        state_features = torch.nan_to_num(state_features, nan=0.0)
 
-    def add_experience(self, state, action, reward, next_state):
-        self.experience_replay.append((state, action, reward, next_state))
+        # Shared feature extraction
+        features = self.shared_fc(state_features)
+        
+        # Actor output: action probabilities
+        action_probs = self.actor(features)
+        
+        # Critic output: state value
+        state_value = self.critic(features)
+        # print(action_probs)
+        return action_probs, state_value
 
-    def choose_action(self, state):
-        self.model.eval()
-        with torch.no_grad():
-            state = torch.tensor(state, dtype=torch.float32)
-            q_values = self.model(state)
-            q_values = q_values.view(-1, 9)  # 将输出重塑为 (a * n, 9)
-            probabilities = torch.softmax(q_values, dim=1)
-            actions = []
-            for prob in probabilities:
-                action = np.random.choice(9, p=prob.numpy())
-                actions.append((action))
-            return actions
+# # Define the state space dimensions and action space dimensions
+# state_dim = 9  # Number of continuous state variables
+# embedding_dims = 8  # Dimension of embeddings for discrete variables
+# action_dim = 5  # Example: replace with desired number of actions
 
-    def trans_to_action(self, actions):
-        actions = np.array(actions)
-        actions = (actions + 0.0) / 10
-        return actions
+# # Initialize the A2C model
+# a2c_model = A2CModel(state_dim, action_dim, embedding_dims)
 
+# # Example of a single forward pass
+# example_state = torch.rand((1, 11))  # Simulated input state with 11 features
+# # Introduce some NaN values to simulate missing data
+# example_state[0, 2] = float('nan')
+# example_state[0, 4] = float('nan')
+
+# # Forward pass
+# action_probs, state_value = a2c_model(example_state)
+
+# print("Action probabilities:", action_probs)
+# print("State value:", state_value)

@@ -13,6 +13,7 @@ import (
 	"github.com/gitferry/bamboo/node"
 	"github.com/gitferry/bamboo/pacemaker"
 	"github.com/gitferry/bamboo/types"
+	"github.com/gitferry/bamboo/DQN"
 )
 
 const FORK = "fork"
@@ -30,6 +31,7 @@ type HotStuff struct {
 	bufferedQCs     map[crypto.Identifier]*blockchain.QC
 	bufferedBlocks  map[types.View]*blockchain.Block
 	mu              sync.Mutex
+	gs *DQN.GlobalState
 }
 
 func NewHotStuff(
@@ -48,6 +50,7 @@ func NewHotStuff(
 	hs.highQC = &blockchain.QC{View: 0}
 	hs.committedBlocks = committedBlocks
 	hs.forkedBlocks = forkedBlocks
+	hs.gs = DQN.GetGlobalState()
 	return hs
 }
 
@@ -67,6 +70,14 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 		return nil
 	}
 	if block.QC != nil {
+		
+		// if hs.IsByz() {
+		// 	action := hs.gs.GetAction(1, int(block.View))
+		// 	log.Debugf("[%v] the action is %v", hs.ID(), action)
+		// 	if action == 1{
+		// 		return nil
+		// 	}
+		// }
 		hs.updateHighQC(block.QC)
 	} else {
 		return fmt.Errorf("the block should contain a QC")
@@ -119,6 +130,7 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 }
 
 func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
+
 	log.Debugf("[%v] is processing the vote, block id: %x", hs.ID(), vote.BlockID)
 	if vote.Voter != hs.ID() {
 		voteIsVerified, err := crypto.PubVerify(vote.Signature, crypto.IDToByte(vote.BlockID), vote.Voter)
@@ -132,6 +144,7 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 		}
 	}
 	isBuilt, qc := hs.bc.AddVote(vote)
+
 	if !isBuilt {
 		log.Debugf("[%v] not sufficient votes to build a QC, block id: %x", hs.ID(), vote.BlockID)
 		return
@@ -141,6 +154,10 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 	_, err := hs.bc.GetBlockByID(qc.BlockID)
 	if err != nil {
 		hs.bufferedQCs[qc.BlockID] = qc
+		return
+	}
+	if hs.IsByz() && hs.gs.GetAction(1, int(vote.View) + 1)== 1 {
+		hs.pm.AdvanceView(qc.View)
 		return
 	}
 	hs.processCertificate(qc)
@@ -170,29 +187,33 @@ func (hs *HotStuff) ProcessLocalTmo(view types.View) {
 
 func (hs *HotStuff) MakeProposal(view types.View, payload []*message.Transaction) *blockchain.Block {
 	qc := hs.forkChoice()
+	qc.View = hs.pm.GetCurView() - 1
 	block := blockchain.MakeBlock(view, qc, qc.BlockID, payload, hs.ID())
+	if hs.IsByz() {
+		block.Mali = true
+	}
 	return block
 }
 
 func (hs *HotStuff) forkChoice() *blockchain.QC {
-	var choice *blockchain.QC
-	if !hs.IsByz() || config.GetConfig().Strategy != FORK {
+	// var choice *blockchain.QC
+	// if !hs.IsByz() || config.GetConfig().Strategy != FORK {
 		return hs.GetHighQC()
-	}
+	// }
 	//	create a fork by returning highQC's parent's QC
-	parBlockID := hs.GetHighQC().BlockID
-	parBlock, err := hs.bc.GetBlockByID(parBlockID)
-	if err != nil {
-		log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
-	}
-	if parBlock.QC.View < hs.preferredView {
-		choice = hs.GetHighQC()
-	} else {
-		choice = parBlock.QC
-	}
-	// to simulate TC's view
-	choice.View = hs.pm.GetCurView() - 1
-	return choice
+	// parBlockID := hs.GetHighQC().BlockID
+	// parBlock, err := hs.bc.GetBlockByID(parBlockID)
+	// if err != nil {
+	// 	log.Warningf("cannot get parent block of block id: %x: %w", parBlockID, err)
+	// }
+	// if parBlock.QC.View < hs.preferredView {
+	// 	choice = hs.GetHighQC()
+	// } else {
+	// 	choice = parBlock.QC
+	// }
+	// // to simulate TC's view
+	// choice.View = hs.pm.GetCurView() - 1
+	// return choice
 }
 
 func (hs *HotStuff) processTC(tc *pacemaker.TC) {
@@ -234,10 +255,6 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 			return
 		}
 	}
-	if hs.IsByz() && config.GetConfig().Strategy == FORK && hs.IsLeader(hs.ID(), qc.View+1) {
-		hs.pm.AdvanceView(qc.View)
-		return
-	}
 	err := hs.updatePreferredView(qc)
 	if err != nil {
 		hs.bufferedQCs[qc.BlockID] = qc
@@ -245,6 +262,7 @@ func (hs *HotStuff) processCertificate(qc *blockchain.QC) {
 		return
 	}
 	hs.pm.AdvanceView(qc.View)
+
 	hs.updateHighQC(qc)
 	if qc.View < 3 {
 		return

@@ -72,11 +72,12 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	if isByz {
 		log.Infof("[%v] is Byzantine", r.ID())
 	}
-	if config.GetConfig().Master == "0" {
-		r.Election = election.NewRotation(config.GetConfig().N())
-	} else {
-		r.Election = election.NewStatic(config.GetConfig().Master)
-	}
+	r.Election = election.NewRotation(config.GetConfig().N())
+	// if config.GetConfig().Master == "0" {
+	// 	r.Election = election.NewRotation(config.GetConfig().N())
+	// } else {
+	// 	r.Election = election.NewStatic(config.GetConfig().Master)
+	// }
 	r.isByz = isByz
 	r.pd = mempool.NewProducer()
 	r.pm = pacemaker.NewPacemaker(config.GetConfig().N())
@@ -131,7 +132,7 @@ func (r *Replica) HandleVote(vote blockchain.Vote) {
 	}
 	r.startSignal()
 	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
-	r.gs.UpdateConsensusStage(int(vote.View), 1)
+	r.gs.UpdateConsensusStage(int(vote.View), 2)
 	r.eventChan <- vote
 }
 
@@ -185,10 +186,15 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 		}
 	}
 	r.gs.UpdateBlockCommitRate(int(block.View))
-	r.gs.Print()
+	if r.IsByz() {
+		r.gs.CommitView(int(block.View))
+	}
+	r.gs.UpdateLastCommittedBlock(int(block.View))
+	r.gs.Print(int(block.View))
+	// r.gs.Print()
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
-	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
+	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x, Byz: %v", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID, block.Mali)
 }
 
 func (r *Replica) processForkedBlock(block *blockchain.Block) {
@@ -198,13 +204,20 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 			r.pd.CollectTxn(txn)
 		}
 	}
+	if r.IsByz() {
 	r.gs.UpdateForkRate(int(block.View), int(r.pm.GetCurView()))
+	r.gs.CommitView(int(block.View))}
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
 }
 
 func (r *Replica) processNewView(newView types.View) {
+	r.gs.UpdateThroughput( float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds())
+	r.gs.UpdateLatency(float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo))
+	r.gs.UpdateConsensusStage(int(newView), 0)
+	log.Debugf("leader is %v", r.FindLeaderFor(newView))
 	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
 	if !r.IsLeader(r.ID(), newView) {
+		r.gs.UpdateConsensusStage(int(newView), 1)
 		return
 	}
 	r.proposeBlock(newView)
@@ -219,7 +232,16 @@ func (r *Replica) proposeBlock(view types.View) {
 	createDuration := createEnd.Sub(createStart)
 	block.Timestamp = time.Now()
 	r.totalCreateDuration += createDuration
-	r.Broadcast(block)
+	// if r.IsByz() && r.gs.GetAction(0, int(view)) == 1 {
+	// 	timer := time.NewTimer(time.Duration(100) * time.Millisecond)
+	// 	go func() {
+	// 			<-timer.C
+	// 			r.Broadcast(block)
+	// 	}()
+	// }else{
+		r.Broadcast(block)
+	// }
+	
 	_ = r.Safety.ProcessBlock(block)
 	r.voteStart = time.Now()
 }
