@@ -304,7 +304,7 @@ func (gs *GlobalState) ViewDone(view int) {
 		BlockGenerationRate: gs.blockGenerationRate,
 		BlockCommitRate: gs.blockCommitRate,
 		MaliBlocks: gs.GetMaliciousBlocks(view),
-		LastCommittedBlock: gs.lastCommittedBlock,
+		LastCommittedBlock: view - gs.lastCommittedBlock,
 		ForkRate: gs.forkRate,
 		ForkNumber: forkedBlocks,
 		ForkMaliNumber: forkedMaliBlocks,

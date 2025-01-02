@@ -38,7 +38,7 @@ def train_a2c_online(model, optimizer, state, reward, buffer, done, view_reward=
         return
     
     # 转换 state 为张量
-    # state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
+    # state = torch.tensor(state, dtype=torch.float32)
 
     # 前向传播
     action_probs, state_value = model(state)
@@ -88,75 +88,49 @@ class TrainingBuffer:
     def __str__(self):
         return f"States: {self.states}, Actions: {self.actions}, Log Probs: {self.log_probs}, Values: {self.values}, Rewards: {self.rewards}, Done Flags: {self.done_flags}"
 
-# 奖励分配
-def distribute_rewards(buffer, total_reward, gamma):
-    """ 使用折扣因子分配总奖励 """
-    discounted_rewards = []
-    G = total_reward  # 从最后一步开始
-    for reward, done in zip(reversed(buffer.rewards), reversed(buffer.done_flags)):
-        G = reward + gamma * G * (1 - done)  # 终止状态的奖励不继续折扣
-        discounted_rewards.insert(0, G)
-    buffer.rewards = discounted_rewards
 
 # 更新模型
 def update_model(model, optimizer, buffer, gamma):
     # 批量化训练
     for i in range(len(buffer.states) - 1):
-      states = buffer.states[i]
-      actions = torch.tensor(buffer.actions[0])
-      next_states = buffer.states[i + 1]
-      reward = buffer.rewards[i]
-      # log_probs = torch.stack(buffer.log_probs)
-      # values = torch.cat(buffer.values, dim=0)
+        states = buffer.states[i]
+        actions = torch.tensor([buffer.actions[i]], dtype=torch.long)  # 确保 actions 是一个张量
+        next_states = buffer.states[i + 1]
+        reward = buffer.rewards[i]
+        done = buffer.done_flags[i + 1]
 
-      # 为了批量处理，计算当前所有状态的动作概率分布和状态值
-      action_probs, state_values = model(states)
-      _, next_state_values = model(next_states)
-      dist = Categorical(action_probs)
-      log_probs_new = dist.log_prob(actions)
-      # print(actions)
-      # 计算每个状态的优势函数 A = R + γ * V(s') - V(s)
-      # advantages = torch.tensor(buffer.rewards, dtype=torch.float32) - state_values
-      advantages = torch.tensor(reward, dtype=torch.float32) + 0 * next_state_values - state_values
-      # 计算 actor 和 critic 的损失
+        # 前向传播
+        action_probs, state_values = model(states)
+        _, next_state_values = model(next_states)
+        dist = Categorical(action_probs)
+        log_probs_new = dist.log_prob(actions)
 
-      td_target = reward + gamma * next_state_values * (1 - buffer.done_flags[i +1])
- 
-      actor_loss = -(log_probs_new * advantages).mean()
-      critic_loss = F.mse_loss(state_values.squeeze(), torch.tensor(td_target, dtype=torch.float32))
+        # 计算每个状态的优势函数 A = R + γ * V(s') - V(s)
+        td_target = reward + gamma * next_state_values.item() * (1 - done)
+        advantages = td_target - state_values.item()
 
+        # 计算 actor 和 critic 的损失
+        actor_loss = -(log_probs_new * advantages)
+        critic_loss = F.mse_loss(state_values.squeeze().unsqueeze(0), torch.tensor([td_target], dtype=torch.float32))
 
-      # 总损失
-      loss = actor_loss + critic_loss
-      ran = random.random()
-      if ran < 0.1:
-          print(f"loss: {loss}")
-          print(f"rewards: {buffer.rewards}")
-          print(f"advantages: {advantages}")
-          print(f"state_values: {state_values}")
-          print(f"action_probs: {action_probs}")
-          print(f"state: {states}")
-          print(f"buffer: {buffer}")
+        # 总损失
+        loss = actor_loss + critic_loss
 
+        # 打印调试信息
+        ran = random.random()
+        if ran < 0.05:
+            print(f"loss: {loss}, actor_loss: {actor_loss}, critic_loss: {critic_loss}, state_value: {state_values.squeeze()}, td_target: {td_target}")
+            print(f"rewards: {buffer.rewards}")
+            print(f"advantages: {advantages}")
+            print(f"state_values: {state_values}")
+            print(f"action_probs: {action_probs}")
+            print(f"state: {states}")
+            print(f"buffer: {buffer}")
 
-      total_grad = 0
-      total_params = 0
-
-
-
-
-      optimizer.zero_grad()
-      loss.backward()
-
-
-      for param in model.parameters():
-        if param.grad is not None:
-            total_grad += param.grad.abs().sum()  # 对梯度求绝对值的和
-            total_params += param.numel()  # 统计参数的总数
-
-      average_grad = total_grad / total_params
-      # print(f"Average gradient size: {average_grad}")
-      optimizer.step()
+        # 反向传播和优化
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 # 训练函数
 def train(model, optimizer, size=100, gamma=0.99):

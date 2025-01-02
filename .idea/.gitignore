@@ -1,2 +1,20 @@
 # Default ignored files
 /workspace.xml
+*.html
+*.css
+*.js
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+*.xml
+*.json
+*.lock
+*.log
+*.md
+*.yml
+*.yaml
+*.gitignore
+*.gitkeep
+*.gitmodules
