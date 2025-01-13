@@ -38,7 +38,6 @@ type GlobalState struct {
 	networkControl *NetworkControl
 	ForkedMap      map[int]int
 	finishedView   map[int]int //0 表示未结束，1表示完成了但是没发送信息，2表示完成了并且发送了信息
-
 }
 
 

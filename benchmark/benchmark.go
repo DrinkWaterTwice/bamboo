@@ -24,7 +24,7 @@ func DefaultBConfig() config.Bconfig {
 		T:           60,
 		N:           0,
 		Throttle:    0,
-		Concurrency: 1,
+		Concurrency: 10,
 	}
 }
 

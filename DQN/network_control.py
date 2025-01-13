@@ -27,6 +27,8 @@ torch.autograd.set_detect_anomaly(True)
 # 创建锁
 model_lock = threading.Lock()
 scaler = StandardScaler()
+
+agents = {}
 # agent.train()
 def handle_client(client_socket):
     try:
@@ -79,49 +81,55 @@ def handle_client(client_socket):
         # forkedNum = json_data["forkNumber"]
         # forkedMaliNum = json_data["forkedMaliNumber"]
 
-        committedMaliBlock = 0
-        if preViewRole[1] == 1:
-            committedMaliBlock = 1
-        action = 0
-        if view not in trainingBuffers:
-            trainingBuffers[view] = train.TrainingBuffer()
-        baseline = 0
-        a1 = 10000
-        a2 = -20000
-        a3 = 10000
-        state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
+        if requestType == 'adjuest':
+            if agents[nodeId] is None:
+                agents[nodeId] = agent
+            state = [throughput]
+            pass
+        else:
+            committedMaliBlock = 0
+            if preViewRole[1] == 1:
+                committedMaliBlock = 1
+            action = 0
+            if view not in trainingBuffers:
+                trainingBuffers[view] = train.TrainingBuffer()
+            baseline = 0
+            a1 = 10000
+            a2 = -20000
+            a3 = 10000
+            state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
 
-        # flattened_state = list(chain.from_iterable(state))
-        flattened_state = []
-        for item in state:
-            if isinstance(item, list):
-                flattened_state.extend(item)
-            else:
-                flattened_state.append(item)
-        flattened_state = scaler.fit_transform(np.array(flattened_state).reshape(-1, 1)).flatten()
-        reward = forkedNum * a1 - baseline + forkedMaliNum * a2 + a3 * committedMaliBlock - a3 * (forkedMaliNum)
-        reward = reward / 10000
-        if requestType == 'request':
-            # state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
-            # reward = forkedNum * a1 - baseline + forkedMaliNum * a2 + a3 * committedMaliBlock - a3 * (forkedMaliNum)
-            with model_lock:
-                action = train.train_a2c_online(agent, optimizer, flattened_state, reward, trainingBuffers[view], False)
+            # flattened_state = list(chain.from_iterable(state))
+            flattened_state = []
+            for item in state:
+                if isinstance(item, list):
+                    flattened_state.extend(item)
+                else:
+                    flattened_state.append(item)
+            flattened_state = scaler.fit_transform(np.array(flattened_state).reshape(-1, 1)).flatten()
+            reward = forkedNum * a1 - baseline + forkedMaliNum * a2 + a3 * committedMaliBlock - a3 * (forkedMaliNum)
+            reward = reward / 10000
+            if requestType == 'request':
+                # state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
+                # reward = forkedNum * a1 - baseline + forkedMaliNum * a2 + a3 * committedMaliBlock - a3 * (forkedMaliNum)
+                with model_lock:
+                    action = train.train_a2c_online(agent, optimizer, flattened_state, reward, trainingBuffers[view], False)
 
-        elif requestType == 'viewDone':
-            # print(f"view done: " + str(view))
-            # view_reward = forkedNum * a1 - baseline + forkedMaliNum * a2
-            # reward = forkedNum * a1 - baseline + forkedMaliNum * a2
-            # state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
-            with model_lock:
-                action = train.train_a2c_online(agent, optimizer, flattened_state, reward, trainingBuffers[view], True, reward)
+            elif requestType == 'viewDone':
+                # print(f"view done: " + str(view))
+                # view_reward = forkedNum * a1 - baseline + forkedMaliNum * a2
+                # reward = forkedNum * a1 - baseline + forkedMaliNum * a2
+                # state = [nodeId, primaryId, role,preViewRole, byzRatio, consensusStage, voteRatio, blockGenerationRate, blockCommitRate, forkRate, throughput, latency]
+                with model_lock:
+                    action = train.train_a2c_online(agent, optimizer, flattened_state, reward, trainingBuffers[view], True, reward)
 
-        response_data = {
-            "actions": action,
-        }
-        if view % 100 == 0:
-            train.train(agent, optimizer)
-            print(response_data)
-            print(json_data)
+            response_data = {
+                "actions": action,
+            }
+            if view % 100 == 0:
+                train.train(agent, optimizer)
+                print(response_data)
+                print(json_data)
         response_json = json.dumps(response_data)
         client_socket.sendall(response_json.encode('utf-8'))
         

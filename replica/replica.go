@@ -40,6 +40,7 @@ type Replica struct {
 	eventChan       chan interface{}
 
 	gs *DQN.GlobalState
+	ticker          *time.Ticker
 
 	/* for monitoring node statistics */
 	thrus                string
@@ -72,6 +73,7 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	if isByz {
 		log.Infof("[%v] is Byzantine", r.ID())
 	}
+
 	r.Election = election.NewRotation(config.GetConfig().N())
 	// if config.GetConfig().Master == "0" {
 	// 	r.Election = election.NewRotation(config.GetConfig().N())
@@ -96,6 +98,8 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TMO{})
 
 	r.gs = DQN.GetGlobalState()
+	r.ticker = time.NewTicker(1 * time.Second)
+	// go r.runTicker()
 
 	// Is there a better way to reduce the number of parameters?
 	switch alg {
@@ -287,6 +291,22 @@ func (r *Replica) ListenCommittedBlocks() {
 		}
 	}
 }
+
+
+
+func(r *Replica) runTicker() {
+	for {
+		select {
+		case <-r.ticker.C:
+		  throughput := float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds()
+			r.gs.UpdateThroughput(throughput)
+			r.totalCommittedTx = 0
+			r.tmpTime = time.Now()
+		}
+	}
+}
+
+
 
 func (r *Replica) startSignal() {
 	if !r.isStarted.Load() {

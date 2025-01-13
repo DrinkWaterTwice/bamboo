@@ -68,6 +68,7 @@ func (b *Backend) some(n int) []*message.Transaction {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	batchSize = b.size()
+	// fmt.Println("batch size:", batchSize)
 	if batchSize >= n {
 		batchSize = n
 	}

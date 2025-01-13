@@ -229,3 +229,14 @@ func (c Config) Save() error {
 func (c Config) IsByzantine(id identity.NodeID) bool {
 	return c.ByzNo >= id.Node()
 }
+
+
+func (c Config) SetPayloadSize(size int) {
+	c.PayloadSize = size
+}
+
+
+func (c Config) SetBSIze(size int) {
+	c.BSize = size
+}
+
