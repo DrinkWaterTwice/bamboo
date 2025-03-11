@@ -3,6 +3,8 @@ package hotstuff
 import (
 	"fmt"
 	"sync"
+	"strconv"
+	"time"
 
 	"github.com/gitferry/bamboo/blockchain"
 	"github.com/gitferry/bamboo/config"
@@ -14,6 +16,8 @@ import (
 	"github.com/gitferry/bamboo/pacemaker"
 	"github.com/gitferry/bamboo/types"
 	"github.com/gitferry/bamboo/DQN"
+	
+	pb "github.com/gitferry/bamboo/DQN/protobuf" 
 )
 
 const FORK = "fork"
@@ -31,7 +35,8 @@ type HotStuff struct {
 	bufferedQCs     map[crypto.Identifier]*blockchain.QC
 	bufferedBlocks  map[types.View]*blockchain.Block
 	mu              sync.Mutex
-	gs *DQN.GlobalState
+	nc 							*DQN.Client
+
 }
 
 func NewHotStuff(
@@ -50,7 +55,7 @@ func NewHotStuff(
 	hs.highQC = &blockchain.QC{View: 0}
 	hs.committedBlocks = committedBlocks
 	hs.forkedBlocks = forkedBlocks
-	hs.gs = DQN.GetGlobalState()
+	hs.nc ,_= DQN.NewClient()
 	return hs
 }
 
@@ -119,8 +124,54 @@ func (hs *HotStuff) ProcessBlock(block *blockchain.Block) error {
 		hs.ProcessVote(vote)
 	} else {
 		log.Debugf("[%v] vote is sent to %v, id: %x", hs.ID(), voteAggregator, vote.BlockID)
+
+		// -------------vote-----------------
+		if hs.IsByz() {
+			r1 := &pb.Request {
+				Action: "delay",
+				Id: int32(hs.ID().Node()),
+				Phase: "vote",
+				View: int32(vote.View),
+			}
+			r2 := &pb.Request {
+				Action: "error_response",
+				Id: int32(hs.ID().Node()),
+				Phase: "vote",
+				View: int32(vote.View),
+			}
+			r3 := &pb.Request {
+				Action: "ambiguity",
+				Id: int32(hs.ID().Node()),
+				Phase: "vote",
+				View: int32(vote.View),
+			}
+			requests := []*pb.Request{r1, r2, r3}
+			response := hs.nc.MaliciousActionInfo(requests)
+			log.Debugf("[%v] the malicious action is %v", hs.ID(), response.Delay)
+			if (response.Ambiguity == 1){
+
+			}
+			if (response.ErrorResponse == 1){
+				vote.BlockID = crypto.Identifier{}
+			}
+			if (response.Delay == 1){
+				delay := response.DelayParms
+				timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+				log.Debugf("[%v] the malicious action delay send %v", hs.ID(), delay)
+				go func() {
+					<-timer.C
+					hs.nc.SendVote(int32(hs.ID().Node()), int32(vote.View), "leader", strconv.Itoa(int(response.DelayParms)) + "ms")
+					hs.Send(voteAggregator, vote)
+				}()
+			}else{
+				hs.nc.SendVote(int32(hs.ID().Node()), int32(vote.View),"leader", "mali 0 ms")
+				hs.Send(voteAggregator, vote)
+			}
+			
+	}else{
+		hs.nc.SendVote(int32(hs.ID().Node()), int32(vote.View),"leader", "0 ms")
 		hs.Send(voteAggregator, vote)
-	}
+	}}
 	b, ok := hs.bufferedBlocks[block.View]
 	if ok {
 		_ = hs.ProcessBlock(b)
@@ -156,10 +207,10 @@ func (hs *HotStuff) ProcessVote(vote *blockchain.Vote) {
 		hs.bufferedQCs[qc.BlockID] = qc
 		return
 	}
-	if hs.IsByz() && hs.gs.GetAction(1, int(vote.View) + 1)== 1 {
-		hs.pm.AdvanceView(qc.View)
-		return
-	}
+	// if hs.IsByz() {
+	// 	hs.pm.AdvanceView(qc.View)
+	// 	return
+	// }
 	hs.processCertificate(qc)
 }
 
@@ -197,9 +248,44 @@ func (hs *HotStuff) MakeProposal(view types.View, payload []*message.Transaction
 
 func (hs *HotStuff) forkChoice() *blockchain.QC {
 	// var choice *blockchain.QC
-	// if !hs.IsByz() || config.GetConfig().Strategy != FORK {
+	if !hs.IsByz() || config.GetConfig().Strategy != FORK {
 		return hs.GetHighQC()
-	// }
+	}
+
+	requests := []*pb.Request {
+		{
+			Action: "fork",
+			Id: int32(hs.ID().Node()),
+			Phase: "fork",
+			View: int32(hs.pm.GetCurView()),
+		},
+	}
+
+	response := hs.nc.MaliciousActionInfo(requests)
+	if response.Fork == 1 {
+		if response.ForkParms == 1 {
+			parentBlockID := hs.GetHighQC().BlockID
+			parentBlock, err := hs.bc.GetBlockByID(parentBlockID)
+			if err != nil {
+				log.Warningf("cannot get parent block of block id: %x: %w", parentBlockID, err)
+			}
+			return parentBlock.QC
+		}
+		if response.ForkParms == 2 {
+			parentBlockID := hs.GetHighQC().BlockID
+			parentBlock, err := hs.bc.GetBlockByID(parentBlockID)
+			grandParentBlockID := parentBlock.QC.BlockID
+			grandParentBlock, err := hs.bc.GetBlockByID(grandParentBlockID)
+			if err != nil {
+				log.Warningf("cannot get grandparent block of block id: %x: %w", grandParentBlockID, err)
+			}
+			return grandParentBlock.QC
+		}
+
+		
+	}
+	return hs.GetHighQC()
+
 	//	create a fork by returning highQC's parent's QC
 	// parBlockID := hs.GetHighQC().BlockID
 	// parBlock, err := hs.bc.GetBlockByID(parBlockID)
@@ -289,6 +375,24 @@ func (hs *HotStuff) votingRule(block *blockchain.Block) (bool, error) {
 	if block.View <= 2 {
 		return true, nil
 	}
+	if hs.IsByz() {
+		requests := []*pb.Request {
+			{
+				Action: "double_vote",
+				Id: int32(hs.ID().Node()),
+				Phase: "vote",
+				View: int32(hs.pm.GetCurView()),
+			},
+		}
+		response := hs.nc.MaliciousActionInfo(requests)
+		if response.DoubleVote == 1 {
+			return true, nil
+		}
+	}
+
+
+
+
 	parentBlock, err := hs.bc.GetParentBlock(block.ID)
 	if err != nil {
 		return false, fmt.Errorf("cannot vote for block: %w", err)

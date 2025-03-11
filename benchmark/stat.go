@@ -42,25 +42,64 @@ func (s Stat) String() string {
 
 // Statistic function creates Stat object from raw latency data
 func Statistic(latency []time.Duration) Stat {
-	ms := make([]float64, 0)
-	for _, l := range latency {
-		ms = append(ms, float64(l.Nanoseconds())/1000000.0)
+	if len(latency) == 0 {
+		return Stat{
+			Data:   []float64{},
+			Size:   0,
+			Mean:   0,
+			Min:    0,
+			Max:    0,
+			Median: 0,
+			P95:    0,
+			P99:    0,
+			P999:   0,
+		}
+	}
+
+	ms := make([]float64, len(latency))
+	for i, l := range latency {
+		ms[i] = float64(l.Nanoseconds()) / 1000000.0
 	}
 	sort.Float64s(ms)
+
 	sum := 0.0
 	for _, m := range ms {
 		sum += m
 	}
 	size := len(ms)
+
+	var median float64
+	mid := size / 2
+	if size%2 == 0 {
+		median = (ms[mid-1] + ms[mid]) / 2
+	} else {
+		median = ms[mid]
+	}
+
 	return Stat{
 		Data:   ms,
 		Size:   size,
 		Mean:   sum / float64(size),
 		Min:    ms[0],
 		Max:    ms[size-1],
-		Median: ms[int(0.5*float64(size))],
-		P95:    ms[int(0.95*float64(size))],
-		P99:    ms[int(0.99*float64(size))],
-		P999:   ms[int(0.999*float64(size))],
+		Median: median,
+		P95:    percentile(ms, 0.95),
+		P99:    percentile(ms, 0.99),
+		P999:   percentile(ms, 0.999),
 	}
+}
+
+// Helper function to calculate percentile
+func percentile(data []float64, p float64) float64 {
+	if len(data) == 0 {
+		return 0
+	}
+	index := int(p * float64(len(data)))
+	if index < 0 {
+		return data[0]
+	}
+	if index >= len(data) {
+		return data[len(data)-1]
+	}
+	return data[index]
 }

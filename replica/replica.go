@@ -4,6 +4,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"time"
+	"strconv"
 
 	fhs "github.com/gitferry/bamboo/fasthostuff"
 	"github.com/gitferry/bamboo/lbft"
@@ -23,6 +24,7 @@ import (
 	"github.com/gitferry/bamboo/streamlet"
 	"github.com/gitferry/bamboo/tchs"
 	"github.com/gitferry/bamboo/types"
+	pb "github.com/gitferry/bamboo/DQN/protobuf" 
 )
 
 type Replica struct {
@@ -39,7 +41,7 @@ type Replica struct {
 	forkedBlocks    chan *blockchain.Block
 	eventChan       chan interface{}
 
-	gs *DQN.GlobalState
+	nc              *DQN.Client
 	ticker          *time.Ticker
 
 	/* for monitoring node statistics */
@@ -97,8 +99,13 @@ func NewReplica(id identity.NodeID, alg string, isByz bool) *Replica {
 	gob.Register(pacemaker.TC{})
 	gob.Register(pacemaker.TMO{})
 
-	r.gs = DQN.GetGlobalState()
-	r.ticker = time.NewTicker(1 * time.Second)
+	r.nc, _ = DQN.NewClient()
+
+	r.nc.Init()
+	
+
+
+	r.ticker = time.NewTicker(2 * time.Second)
 	// go r.runTicker()
 
 	// Is there a better way to reduce the number of parameters?
@@ -125,8 +132,6 @@ func (r *Replica) HandleBlock(block blockchain.Block) {
 	r.receivedNo++
 	r.startSignal()
 	log.Debugf("[%v] received a block from %v, view is %v, id: %x, prevID: %x", r.ID(), block.Proposer, block.View, block.ID, block.PrevID)
-	r.gs.UpdateBlockGenerationRate(int(block.View))
-	r.gs.UpdateConsensusStage(int(block.View), 1)
 	r.eventChan <- block
 }
 
@@ -136,7 +141,6 @@ func (r *Replica) HandleVote(vote blockchain.Vote) {
 	}
 	r.startSignal()
 	log.Debugf("[%v] received a vote frm %v, blockID is %x", r.ID(), vote.Voter, vote.BlockID)
-	r.gs.UpdateConsensusStage(int(vote.View), 2)
 	r.eventChan <- vote
 }
 
@@ -189,13 +193,9 @@ func (r *Replica) processCommittedBlock(block *blockchain.Block) {
 			r.latencyNo++
 		}
 	}
-	r.gs.UpdateBlockCommitRate(int(block.View))
-	if r.IsByz() {
-		r.gs.CommitView(int(block.View))
-	}
-	r.gs.UpdateLastCommittedBlock(int(block.View))
-	r.gs.Print(int(block.View))
-	// r.gs.Print()
+	r.nc.Commit(int32(r.ID().Node()), int32(block.View), "leader")
+
+
 	r.committedNo++
 	r.totalCommittedTx += len(block.Payload)
 	log.Infof("[%v] the block is committed, No. of transactions: %v, view: %v, current view: %v, id: %x, Byz: %v", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID, block.Mali)
@@ -209,19 +209,14 @@ func (r *Replica) processForkedBlock(block *blockchain.Block) {
 		}
 	}
 	if r.IsByz() {
-	r.gs.UpdateForkRate(int(block.View), int(r.pm.GetCurView()))
-	r.gs.CommitView(int(block.View))}
 	log.Infof("[%v] the block is forked, No. of transactions: %v, view: %v, current view: %v, id: %x", r.ID(), len(block.Payload), block.View, r.pm.GetCurView(), block.ID)
-}
+}}
 
 func (r *Replica) processNewView(newView types.View) {
-	r.gs.UpdateThroughput( float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds())
-	r.gs.UpdateLatency(float64(r.totalDelay.Milliseconds()) / float64(r.latencyNo))
-	r.gs.UpdateConsensusStage(int(newView), 0)
+
 	log.Debugf("leader is %v", r.FindLeaderFor(newView))
 	log.Debugf("[%v] is processing new view: %v, leader is %v", r.ID(), newView, r.FindLeaderFor(newView))
 	if !r.IsLeader(r.ID(), newView) {
-		r.gs.UpdateConsensusStage(int(newView), 1)
 		return
 	}
 	r.proposeBlock(newView)
@@ -231,6 +226,10 @@ func (r *Replica) proposeBlock(view types.View) {
 	createStart := time.Now()
 	block := r.Safety.MakeProposal(view, r.pd.GeneratePayload())
 	r.totalBlockSize += len(block.Payload)
+
+		r.nc.Proposal(int32(r.ID().Node()), int32(view), "leader")
+	
+	
 	r.proposedNo++
 	createEnd := time.Now()
 	createDuration := createEnd.Sub(createStart)
@@ -243,7 +242,53 @@ func (r *Replica) proposeBlock(view types.View) {
 	// 			r.Broadcast(block)
 	// 	}()
 	// }else{
-		r.Broadcast(block)
+
+	if r.IsByz() {
+		r1 := &pb.Request {
+			Action: "delay",
+			Id: int32(r.ID().Node()),
+			Phase: "process",
+			View: int32(block.View),
+		}
+		r2 := &pb.Request {
+			Action: "error_response",
+			Id: int32(r.ID().Node()),
+			Phase: "process",
+			View: int32(block.View),
+		}
+		r3 := &pb.Request {
+			Action: "ambiguity",
+			Id: int32(r.ID().Node()),
+			Phase: "process",
+			View: int32(block.View),
+		}
+		requests := []*pb.Request{r1, r2, r3}
+		response := r.nc.MaliciousActionInfo(requests)
+		log.Debugf("[%v] the malicious action is %v", r.ID(), response.Delay)
+		if (response.Ambiguity == 1){
+
+		}
+		if (response.ErrorResponse == 1){
+			// block.BlockID = crypto.Identifier{}
+		}
+		if (response.Delay == 1){
+			delay := response.DelayParms
+			timer := time.NewTimer(time.Duration(delay) * time.Millisecond)
+			log.Debugf("[%v] the malicious action delay send %v", r.ID(), delay)
+			go func() {
+				<-timer.C
+				r.nc.SendBlock(int32(r.ID().Node()), int32(block.View), "leader", strconv.Itoa(int(response.DelayParms)) + "ms")
+				r.Broadcast(block)
+			}()
+		}else{
+			r.nc.SendBlock(int32(r.ID().Node()), int32(block.View),"leader", "mali 0 ms")
+			r.Broadcast(block)
+		}}
+
+
+
+		
+		
 	// }
 	
 	_ = r.Safety.ProcessBlock(block)
@@ -294,17 +339,16 @@ func (r *Replica) ListenCommittedBlocks() {
 
 
 
-func(r *Replica) runTicker() {
-	for {
-		select {
-		case <-r.ticker.C:
-		  throughput := float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds()
-			r.gs.UpdateThroughput(throughput)
-			r.totalCommittedTx = 0
-			r.tmpTime = time.Now()
-		}
-	}
-}
+// func(r *Replica) runTicker() {
+// 	for {
+// 		select {
+// 		case <-r.ticker.C:
+// 		  throughput := float64(r.totalCommittedTx)/time.Now().Sub(r.tmpTime).Seconds()
+// 			r.totalCommittedTx = 0
+// 			r.tmpTime = time.Now()
+// 		}
+// 	}
+// }
 
 
 

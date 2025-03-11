@@ -154,7 +154,7 @@ func (t *tcp) Listen() {
 						var m interface{}
 						err := decoder.Decode(&m)
 						if err != nil {
-							log.Error(err)
+							// log.Error(err)
 							continue
 						}
 						t.recv <- m
